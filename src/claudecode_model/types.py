@@ -56,7 +56,7 @@ class CLIResponse(BaseModel):
     total_cost_usd: float | None = None
     usage: CLIUsage
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     def to_model_response(self, model_name: str | None = None) -> ModelResponse:
         """Convert CLI response to pydantic-ai ModelResponse."""
