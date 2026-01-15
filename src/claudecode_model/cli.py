@@ -5,17 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from typing import TYPE_CHECKING
 
 from claudecode_model.exceptions import (
     CLIExecutionError,
     CLINotFoundError,
     CLIResponseParseError,
 )
-from claudecode_model.types import CLIResponse, parse_cli_response
+from claudecode_model.types import CLIResponse, CLIResponseData, parse_cli_response
 
-if TYPE_CHECKING:
-    pass
+# Constants
+DEFAULT_MODEL = "claude-sonnet-4-5"
+DEFAULT_TIMEOUT_SECONDS = 120.0
+MAX_PROMPT_LENGTH = 1_000_000  # 1MB limit
 
 
 class ClaudeCodeCLI:
@@ -24,9 +25,9 @@ class ClaudeCodeCLI:
     def __init__(
         self,
         *,
-        model: str = "claude-sonnet-4-5",
+        model: str = DEFAULT_MODEL,
         working_directory: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
         permission_mode: str | None = None,
@@ -57,7 +58,25 @@ class ClaudeCodeCLI:
         return cli_path
 
     def _build_command(self, prompt: str) -> list[str]:
-        """Build the CLI command with arguments."""
+        """Build the CLI command with arguments.
+
+        Args:
+            prompt: The user prompt to send to the CLI.
+
+        Returns:
+            List of command arguments.
+
+        Raises:
+            ValueError: If prompt is empty or exceeds maximum length.
+        """
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty")
+
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            raise ValueError(
+                f"Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters"
+            )
+
         cli_path = self._find_cli()
         cmd = [
             cli_path,
@@ -84,8 +103,22 @@ class ClaudeCodeCLI:
         return cmd
 
     async def execute(self, prompt: str) -> CLIResponse:
-        """Execute the CLI with the given prompt and return the response."""
+        """Execute the CLI with the given prompt and return the response.
+
+        Args:
+            prompt: The user prompt to send to the CLI.
+
+        Returns:
+            Parsed CLI response.
+
+        Raises:
+            CLINotFoundError: If the claude CLI is not found.
+            CLIExecutionError: If CLI execution fails or returns an error.
+            CLIResponseParseError: If the CLI output cannot be parsed.
+            ValueError: If the prompt is invalid.
+        """
         cmd = self._build_command(prompt)
+        process: asyncio.subprocess.Process | None = None
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -101,16 +134,49 @@ class ClaudeCodeCLI:
             )
 
         except asyncio.TimeoutError as e:
+            if process is not None:
+                process.kill()
+                await process.wait()
             raise CLIExecutionError(
-                f"CLI execution timed out after {self.timeout} seconds",
-                exit_code=None,
-                stderr="",
+                f"CLI execution timed out after {self.timeout} seconds. "
+                "Consider increasing the timeout or simplifying the request.",
+                exit_code=-9,
+                stderr="Process was killed due to timeout",
             ) from e
+        except asyncio.CancelledError:
+            if process is not None:
+                process.kill()
+                await process.wait()
+            raise
         except FileNotFoundError as e:
-            raise CLINotFoundError(f"claude CLI not found: {e}") from e
+            raise CLINotFoundError(
+                f"claude CLI not found at expected location. "
+                f"Please install Claude Code: https://claude.ai/download. "
+                f"Details: {e}"
+            ) from e
+        except PermissionError as e:
+            raise CLIExecutionError(
+                f"Permission denied when executing claude CLI. "
+                f"Check file permissions: {e}",
+                exit_code=None,
+                stderr=str(e),
+            ) from e
+        except OSError as e:
+            raise CLIExecutionError(
+                f"OS error during CLI execution: {e}. "
+                f"Working directory: {self.working_directory}",
+                exit_code=None,
+                stderr=str(e),
+            ) from e
 
-        stdout_str = stdout.decode("utf-8")
-        stderr_str = stderr.decode("utf-8")
+        try:
+            stdout_str = stdout.decode("utf-8")
+            stderr_str = stderr.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise CLIResponseParseError(
+                f"Failed to decode CLI output as UTF-8: {e}",
+                raw_output=repr(stdout[:500]),
+            ) from e
 
         if process.returncode != 0:
             raise CLIExecutionError(
@@ -120,11 +186,20 @@ class ClaudeCodeCLI:
             )
 
         try:
-            data = json.loads(stdout_str)
+            data: CLIResponseData = json.loads(stdout_str)
         except json.JSONDecodeError as e:
             raise CLIResponseParseError(
                 f"Failed to parse CLI JSON output: {e}",
                 raw_output=stdout_str,
             ) from e
 
-        return parse_cli_response(data)
+        response = parse_cli_response(data)
+
+        if response.is_error:
+            raise CLIExecutionError(
+                f"CLI reported error: {response.result or 'Unknown error'}",
+                exit_code=process.returncode,
+                stderr=response.result,
+            )
+
+        return response

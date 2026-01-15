@@ -1,0 +1,311 @@
+"""Tests for claudecode_model.model module."""
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import ModelRequestParameters
+
+from claudecode_model.cli import DEFAULT_MODEL, DEFAULT_TIMEOUT_SECONDS
+from claudecode_model.model import ClaudeCodeModel
+from claudecode_model.types import CLIResponse, CLIUsage
+
+
+class TestClaudeCodeModelInit:
+    """Tests for ClaudeCodeModel initialization."""
+
+    def test_default_values(self) -> None:
+        """ClaudeCodeModel should use default values."""
+        model = ClaudeCodeModel()
+        assert model.model_name == DEFAULT_MODEL
+        assert model._timeout == DEFAULT_TIMEOUT_SECONDS
+        assert model._working_directory is None
+        assert model._allowed_tools is None
+        assert model._disallowed_tools is None
+        assert model._permission_mode is None
+
+    def test_custom_values(self) -> None:
+        """ClaudeCodeModel should accept custom values."""
+        model = ClaudeCodeModel(
+            model_name="claude-opus-4",
+            working_directory="/tmp",
+            timeout=60.0,
+            allowed_tools=["Read"],
+            disallowed_tools=["Bash"],
+            permission_mode="bypassPermissions",
+        )
+        assert model.model_name == "claude-opus-4"
+        assert model._working_directory == "/tmp"
+        assert model._timeout == 60.0
+        assert model._allowed_tools == ["Read"]
+        assert model._disallowed_tools == ["Bash"]
+        assert model._permission_mode == "bypassPermissions"
+
+
+class TestClaudeCodeModelProperties:
+    """Tests for ClaudeCodeModel properties."""
+
+    def test_model_name_property(self) -> None:
+        """model_name property should return the model name."""
+        model = ClaudeCodeModel(model_name="test-model")
+        assert model.model_name == "test-model"
+
+    def test_system_property(self) -> None:
+        """system property should return 'claude-code'."""
+        model = ClaudeCodeModel()
+        assert model.system == "claude-code"
+
+
+class TestClaudeCodeModelRepr:
+    """Tests for ClaudeCodeModel __repr__."""
+
+    def test_repr(self) -> None:
+        """__repr__ should return a readable representation."""
+        model = ClaudeCodeModel(model_name="test-model")
+        assert repr(model) == "ClaudeCodeModel(model_name='test-model')"
+
+
+class TestClaudeCodeModelExtractSystemPrompt:
+    """Tests for ClaudeCodeModel._extract_system_prompt method."""
+
+    def test_extracts_system_prompt(self) -> None:
+        """_extract_system_prompt should extract system prompt from messages."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="You are helpful."),
+                    UserPromptPart(content="Hello"),
+                ]
+            )
+        ]
+        result = model._extract_system_prompt(messages)
+        assert result == "You are helpful."
+
+    def test_returns_none_when_no_system_prompt(self) -> None:
+        """_extract_system_prompt should return None when no system prompt."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        result = model._extract_system_prompt(messages)
+        assert result is None
+
+    def test_returns_first_system_prompt(self) -> None:
+        """_extract_system_prompt should return the first system prompt found."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="First"),
+                    SystemPromptPart(content="Second"),
+                ]
+            )
+        ]
+        result = model._extract_system_prompt(messages)
+        assert result == "First"
+
+
+class TestClaudeCodeModelExtractUserPrompt:
+    """Tests for ClaudeCodeModel._extract_user_prompt method."""
+
+    def test_extracts_user_prompt(self) -> None:
+        """_extract_user_prompt should extract user prompt from messages."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        result = model._extract_user_prompt(messages)
+        assert result == "Hello"
+
+    def test_joins_multiple_user_prompts(self) -> None:
+        """_extract_user_prompt should join multiple user prompts."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    UserPromptPart(content="Hello"),
+                    UserPromptPart(content="World"),
+                ]
+            )
+        ]
+        result = model._extract_user_prompt(messages)
+        assert result == "Hello\nWorld"
+
+    def test_raises_on_empty_messages(self) -> None:
+        """_extract_user_prompt should raise ValueError on empty messages."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = []
+        with pytest.raises(ValueError, match="No user prompt found"):
+            model._extract_user_prompt(messages)
+
+    def test_raises_on_no_user_prompt(self) -> None:
+        """_extract_user_prompt should raise ValueError when no user prompt."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[SystemPromptPart(content="System")])
+        ]
+        with pytest.raises(ValueError, match="No user prompt found"):
+            model._extract_user_prompt(messages)
+
+    def test_handles_list_content(self) -> None:
+        """_extract_user_prompt should handle list content."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    UserPromptPart(content=["Part 1", "Part 2"]),  # type: ignore[arg-type]
+                ]
+            )
+        ]
+        result = model._extract_user_prompt(messages)
+        assert result == "Part 1\nPart 2"
+
+
+class TestClaudeCodeModelRequest:
+    """Tests for ClaudeCodeModel.request method."""
+
+    @pytest.fixture
+    def mock_cli_response(self) -> CLIResponse:
+        """Return a mock CLI response."""
+        return CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Response from Claude",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_request(self, mock_cli_response: CLIResponse) -> None:
+        """request should return ModelResponse on success."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with (
+            patch.object(ClaudeCodeModel, "_extract_user_prompt", return_value="Hello"),
+            patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class,
+        ):
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            response = await model.request(messages, None, params)
+
+            assert isinstance(response, ModelResponse)
+            assert len(response.parts) == 1
+            assert isinstance(response.parts[0], TextPart)
+            assert response.parts[0].content == "Response from Claude"
+
+    @pytest.mark.asyncio
+    async def test_passes_system_prompt_to_cli(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should pass system prompt to CLI."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="Be helpful"),
+                    UserPromptPart(content="Hello"),
+                ]
+            )
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            mock_cli_class.assert_called_once()
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["system_prompt"] == "Be helpful"
+
+    @pytest.mark.asyncio
+    async def test_uses_timeout_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use timeout from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"timeout": 60.0}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["timeout"] == 60.0
+
+    @pytest.mark.asyncio
+    async def test_creates_new_cli_per_request(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should create new CLI instance per request (no race condition)."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            # Make two requests
+            await model.request(messages, None, params)
+            await model.request(messages, None, params)
+
+            # Should have created two CLI instances
+            assert mock_cli_class.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_on_empty_prompt(self) -> None:
+        """request should raise ValueError when no user prompt found."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[SystemPromptPart(content="System")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with pytest.raises(ValueError, match="No user prompt found"):
+            await model.request(messages, None, params)
