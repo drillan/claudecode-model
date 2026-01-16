@@ -117,7 +117,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt, working_directory).
 
         Returns:
             CLIResponse containing the raw CLI output with all metadata.
@@ -136,6 +136,7 @@ class ClaudeCodeModel(Model):
         max_budget_usd: float | None = None
         append_system_prompt: str | None = None
         max_turns: int | None = self._max_turns
+        working_directory: str | None = self._working_directory
 
         if model_settings is not None:
             timeout_value = model_settings.get("timeout")
@@ -188,9 +189,23 @@ class ClaudeCodeModel(Model):
                         type(max_turns_value).__name__,
                     )
 
+            wd_value = model_settings.get("working_directory")
+            if wd_value is not None:
+                if not isinstance(wd_value, str):
+                    raise TypeError(
+                        f"model_settings 'working_directory' must be str, "
+                        f"got {type(wd_value).__name__}"
+                    )
+                if wd_value == "":
+                    logger.warning(
+                        "model_settings 'working_directory' is an empty string. "
+                        "This may not be a valid path."
+                    )
+                working_directory = wd_value
+
         cli = ClaudeCodeCLI(
             model=self._model_name,
-            working_directory=self._working_directory,
+            working_directory=working_directory,
             timeout=timeout,
             allowed_tools=self._allowed_tools,
             disallowed_tools=self._disallowed_tools,
@@ -213,7 +228,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt, working_directory).
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
@@ -242,7 +257,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt, working_directory).
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
