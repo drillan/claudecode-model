@@ -20,6 +20,7 @@ from claudecode_model.types import (
     CLIUsage,
     CLIUsageData,
     ClaudeCodeModelSettings,
+    RequestWithMetadataResult,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "CLIExecutionError",
     "CLIResponseParseError",
     "ErrorType",
+    "RequestWithMetadataResult",
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
     "MAX_PROMPT_LENGTH",

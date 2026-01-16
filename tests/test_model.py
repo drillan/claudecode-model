@@ -659,3 +659,160 @@ class TestClaudeCodeModelRequest:
 
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs["max_turns"] == 10
+
+
+class TestClaudeCodeModelRequestWithMetadata:
+    """Tests for ClaudeCodeModel.request_with_metadata method."""
+
+    @pytest.fixture
+    def mock_cli_response(self) -> CLIResponse:
+        """Return a mock CLI response with full metadata."""
+        return CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1500,
+            duration_api_ms=1200,
+            num_turns=3,
+            result="Response with metadata",
+            session_id="test-session-123",
+            total_cost_usd=0.05,
+            usage=CLIUsage(
+                input_tokens=200,
+                output_tokens=100,
+                cache_creation_input_tokens=50,
+                cache_read_input_tokens=25,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_returns_named_tuple(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request_with_metadata should return RequestWithMetadataResult NamedTuple."""
+        from claudecode_model.types import RequestWithMetadataResult
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            result = await model.request_with_metadata(messages, None, params)
+
+            assert isinstance(result, RequestWithMetadataResult)
+            assert hasattr(result, "response")
+            assert hasattr(result, "cli_response")
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_response_matches_request(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request_with_metadata response should match regular request output."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            result = await model.request_with_metadata(messages, None, params)
+
+            assert isinstance(result.response, ModelResponse)
+            assert len(result.response.parts) == 1
+            assert isinstance(result.response.parts[0], TextPart)
+            assert result.response.parts[0].content == "Response with metadata"
+            assert result.response.model_name == model.model_name
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_preserves_all_cli_fields(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request_with_metadata should preserve all CLI metadata fields."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            result = await model.request_with_metadata(messages, None, params)
+
+            # Verify all metadata fields are preserved
+            assert result.cli_response.type == "result"
+            assert result.cli_response.subtype == "success"
+            assert result.cli_response.is_error is False
+            assert result.cli_response.duration_ms == 1500
+            assert result.cli_response.duration_api_ms == 1200
+            assert result.cli_response.num_turns == 3
+            assert result.cli_response.result == "Response with metadata"
+            assert result.cli_response.session_id == "test-session-123"
+            assert result.cli_response.total_cost_usd == 0.05
+            assert result.cli_response.usage.input_tokens == 200
+            assert result.cli_response.usage.output_tokens == 100
+            assert result.cli_response.usage.cache_creation_input_tokens == 50
+            assert result.cli_response.usage.cache_read_input_tokens == 25
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_with_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request_with_metadata should pass model_settings to CLI."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {
+            "timeout": 120.0,
+            "max_budget_usd": 1.0,
+            "max_turns": 5,
+        }
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request_with_metadata(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["timeout"] == 120.0
+            assert call_kwargs["max_budget_usd"] == 1.0
+            assert call_kwargs["max_turns"] == 5
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_raises_on_error(self) -> None:
+        """request_with_metadata should raise ValueError when no user prompt found."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[SystemPromptPart(content="System")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with pytest.raises(ValueError, match="No user prompt found"):
+            await model.request_with_metadata(messages, None, params)

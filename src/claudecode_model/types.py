@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from pydantic import BaseModel, Field
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -88,6 +88,18 @@ class CLIResponse(BaseModel):
             ),
             model_name=model_name,
         )
+
+
+class RequestWithMetadataResult(NamedTuple):
+    """Result from request_with_metadata containing both response and CLI metadata.
+
+    Attributes:
+        response: The pydantic-ai ModelResponse for use with Agent.
+        cli_response: The raw CLIResponse with full metadata (duration, cost, turns, etc).
+    """
+
+    response: ModelResponse
+    cli_response: CLIResponse
 
 
 def parse_cli_response(json_data: CLIResponseData) -> CLIResponse:
