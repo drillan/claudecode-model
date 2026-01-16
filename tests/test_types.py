@@ -30,6 +30,16 @@ class TestServerToolUse:
         assert server_tool_use.web_search_requests == 5
         assert server_tool_use.web_fetch_requests == 3
 
+    def test_rejects_negative_web_search_requests(self) -> None:
+        """ServerToolUse should reject negative web_search_requests."""
+        with pytest.raises(ValidationError):
+            ServerToolUse(web_search_requests=-1, web_fetch_requests=0)
+
+    def test_rejects_negative_web_fetch_requests(self) -> None:
+        """ServerToolUse should reject negative web_fetch_requests."""
+        with pytest.raises(ValidationError):
+            ServerToolUse(web_search_requests=0, web_fetch_requests=-1)
+
 
 class TestCacheCreation:
     """Tests for CacheCreation model."""
@@ -48,6 +58,16 @@ class TestCacheCreation:
         assert cache_creation.ephemeral_1h_input_tokens == 100
         assert cache_creation.ephemeral_5m_input_tokens == 200
 
+    def test_rejects_negative_ephemeral_1h_input_tokens(self) -> None:
+        """CacheCreation should reject negative ephemeral_1h_input_tokens."""
+        with pytest.raises(ValidationError):
+            CacheCreation(ephemeral_1h_input_tokens=-1, ephemeral_5m_input_tokens=0)
+
+    def test_rejects_negative_ephemeral_5m_input_tokens(self) -> None:
+        """CacheCreation should reject negative ephemeral_5m_input_tokens."""
+        with pytest.raises(ValidationError):
+            CacheCreation(ephemeral_1h_input_tokens=0, ephemeral_5m_input_tokens=-1)
+
 
 class TestModelUsageData:
     """Tests for ModelUsageData model."""
@@ -57,8 +77,8 @@ class TestModelUsageData:
         with pytest.raises(ValidationError):
             ModelUsageData()  # type: ignore[call-arg]
 
-    def test_valid_values(self) -> None:
-        """ModelUsageData should accept valid values."""
+    def test_valid_values_with_alias(self) -> None:
+        """ModelUsageData should accept values using camelCase aliases (JSON format)."""
         model_usage = ModelUsageData(
             inputTokens=100,
             outputTokens=50,
@@ -69,14 +89,212 @@ class TestModelUsageData:
             contextWindow=200000,
             maxOutputTokens=64000,
         )
-        assert model_usage.inputTokens == 100
-        assert model_usage.outputTokens == 50
-        assert model_usage.cacheReadInputTokens == 200
-        assert model_usage.cacheCreationInputTokens == 300
-        assert model_usage.webSearchRequests == 1
-        assert model_usage.costUSD == 0.05
-        assert model_usage.contextWindow == 200000
-        assert model_usage.maxOutputTokens == 64000
+        assert model_usage.input_tokens == 100
+        assert model_usage.output_tokens == 50
+        assert model_usage.cache_read_input_tokens == 200
+        assert model_usage.cache_creation_input_tokens == 300
+        assert model_usage.web_search_requests == 1
+        assert model_usage.cost_usd == 0.05
+        assert model_usage.context_window == 200000
+        assert model_usage.max_output_tokens == 64000
+
+    def test_valid_values_with_snake_case(self) -> None:
+        """ModelUsageData should accept values using snake_case via model_validate."""
+        model_usage = ModelUsageData.model_validate(
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 200,
+                "cache_creation_input_tokens": 300,
+                "web_search_requests": 1,
+                "cost_usd": 0.05,
+                "context_window": 200000,
+                "max_output_tokens": 64000,
+            }
+        )
+        assert model_usage.input_tokens == 100
+        assert model_usage.output_tokens == 50
+        assert model_usage.cache_read_input_tokens == 200
+        assert model_usage.cache_creation_input_tokens == 300
+        assert model_usage.web_search_requests == 1
+        assert model_usage.cost_usd == 0.05
+        assert model_usage.context_window == 200000
+        assert model_usage.max_output_tokens == 64000
+
+    def test_rejects_negative_input_tokens(self) -> None:
+        """ModelUsageData should reject negative input_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=-1,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_output_tokens(self) -> None:
+        """ModelUsageData should reject negative output_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=-1,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_cost_usd(self) -> None:
+        """ModelUsageData should reject negative cost_usd."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=-0.01,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_cache_read_input_tokens(self) -> None:
+        """ModelUsageData should reject negative cache_read_input_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=-1,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_cache_creation_input_tokens(self) -> None:
+        """ModelUsageData should reject negative cache_creation_input_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=-1,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_web_search_requests(self) -> None:
+        """ModelUsageData should reject negative web_search_requests."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=-1,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_context_window(self) -> None:
+        """ModelUsageData should reject negative context_window."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=-1,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_max_output_tokens(self) -> None:
+        """ModelUsageData should reject negative max_output_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=-1,
+            )
+
+    def test_model_dump_uses_alias_by_default(self) -> None:
+        """ModelUsageData.model_dump should use camelCase aliases by default."""
+        model_usage = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=200,
+            cacheCreationInputTokens=300,
+            webSearchRequests=1,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        dumped = model_usage.model_dump(by_alias=True)
+        assert "inputTokens" in dumped
+        assert "outputTokens" in dumped
+        assert "cacheReadInputTokens" in dumped
+        assert "cacheCreationInputTokens" in dumped
+        assert "webSearchRequests" in dumped
+        assert "costUSD" in dumped
+        assert "contextWindow" in dumped
+        assert "maxOutputTokens" in dumped
+        assert dumped["inputTokens"] == 100
+        assert dumped["costUSD"] == 0.05
+
+    def test_model_dump_uses_field_names(self) -> None:
+        """ModelUsageData.model_dump should use snake_case field names."""
+        model_usage = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=200,
+            cacheCreationInputTokens=300,
+            webSearchRequests=1,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        dumped = model_usage.model_dump()
+        assert "input_tokens" in dumped
+        assert "output_tokens" in dumped
+        assert "cache_read_input_tokens" in dumped
+        assert "cache_creation_input_tokens" in dumped
+        assert "web_search_requests" in dumped
+        assert "cost_usd" in dumped
+        assert "context_window" in dumped
+        assert "max_output_tokens" in dumped
+        assert dumped["input_tokens"] == 100
+        assert dumped["cost_usd"] == 0.05
+
+    def test_rejects_extra_fields(self) -> None:
+        """ModelUsageData should reject extra fields (extra='forbid')."""
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+                unknownField=123,  # type: ignore[call-arg]
+            )
 
 
 class TestCLIUsage:
@@ -220,9 +438,84 @@ class TestCLIResponse:
         )
         assert response.model_usage is not None
         assert "claude-opus-4-5-20251101" in response.model_usage
-        assert response.model_usage["claude-opus-4-5-20251101"].inputTokens == 2
+        assert response.model_usage["claude-opus-4-5-20251101"].input_tokens == 2
         assert response.permission_denials == []
         assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
+
+    def test_permission_denials_with_values(self) -> None:
+        """CLIResponse should accept non-empty permission_denials list."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="test",
+            usage=CLIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            permission_denials=[
+                "User denied permission to run: rm -rf /",
+                "User denied permission to run: sudo apt install",
+            ],
+        )
+        assert response.permission_denials is not None
+        assert len(response.permission_denials) == 2
+        assert "rm -rf /" in response.permission_denials[0]
+        assert "sudo apt install" in response.permission_denials[1]
+
+    def test_multiple_models_in_model_usage(self) -> None:
+        """CLIResponse should accept model_usage with multiple models."""
+        model_usage_opus = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=0,
+            cacheCreationInputTokens=0,
+            webSearchRequests=0,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        model_usage_haiku = ModelUsageData(
+            inputTokens=200,
+            outputTokens=100,
+            cacheReadInputTokens=0,
+            cacheCreationInputTokens=0,
+            webSearchRequests=0,
+            costUSD=0.01,
+            contextWindow=200000,
+            maxOutputTokens=8192,
+        )
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=3000,
+            duration_api_ms=2500,
+            num_turns=2,
+            result="test result",
+            usage=CLIUsage(
+                input_tokens=300,
+                output_tokens=150,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            modelUsage={
+                "claude-opus-4-5-20251101": model_usage_opus,
+                "claude-3-5-haiku-20241022": model_usage_haiku,
+            },
+        )
+        assert response.model_usage is not None
+        assert len(response.model_usage) == 2
+        assert "claude-opus-4-5-20251101" in response.model_usage
+        assert "claude-3-5-haiku-20241022" in response.model_usage
+        assert response.model_usage["claude-opus-4-5-20251101"].input_tokens == 100
+        assert response.model_usage["claude-3-5-haiku-20241022"].input_tokens == 200
+        assert response.model_usage["claude-3-5-haiku-20241022"].cost_usd == 0.01
 
     def test_rejects_extra_fields(self) -> None:
         """CLIResponse should reject extra fields (extra='forbid')."""
@@ -406,7 +699,7 @@ class TestParseCLIResponse:
         assert response.usage.cache_creation.ephemeral_5m_input_tokens == 7365
         assert response.model_usage is not None
         assert "claude-opus-4-5-20251101" in response.model_usage
-        assert response.model_usage["claude-opus-4-5-20251101"].inputTokens == 2
+        assert response.model_usage["claude-opus-4-5-20251101"].input_tokens == 2
         assert response.permission_denials == []
         assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
 
