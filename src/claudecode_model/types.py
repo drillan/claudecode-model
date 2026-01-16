@@ -19,10 +19,12 @@ class ClaudeCodeModelSettings(ModelSettings, total=False):
         timeout: Request timeout in seconds (inherited from ModelSettings).
         max_budget_usd: Maximum budget in USD for the request.
         append_system_prompt: Additional system prompt to append.
+        max_turns: Maximum number of turns for the CLI execution.
     """
 
     max_budget_usd: float
     append_system_prompt: str
+    max_turns: int
 
 
 class CLIUsageData(TypedDict, total=False):

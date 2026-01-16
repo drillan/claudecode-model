@@ -40,6 +40,7 @@ class ClaudeCodeModel(Model):
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
         permission_mode: str | None = None,
+        max_turns: int | None = None,
     ) -> None:
         self._model_name = model_name
         self._working_directory = working_directory
@@ -47,6 +48,7 @@ class ClaudeCodeModel(Model):
         self._allowed_tools = allowed_tools
         self._disallowed_tools = disallowed_tools
         self._permission_mode = permission_mode
+        self._max_turns = max_turns
 
     @property
     def model_name(self) -> str:
@@ -132,6 +134,7 @@ class ClaudeCodeModel(Model):
         timeout = self._timeout
         max_budget_usd: float | None = None
         append_system_prompt: str | None = None
+        max_turns: int | None = self._max_turns
 
         if model_settings is not None:
             timeout_value = model_settings.get("timeout")
@@ -169,6 +172,21 @@ class ClaudeCodeModel(Model):
                         type(append_prompt_value).__name__,
                     )
 
+            max_turns_value = model_settings.get("max_turns")
+            if max_turns_value is not None:
+                if isinstance(max_turns_value, int) and not isinstance(
+                    max_turns_value, bool
+                ):
+                    if max_turns_value <= 0:
+                        raise ValueError("max_turns must be a positive integer")
+                    max_turns = max_turns_value
+                else:
+                    logger.warning(
+                        "model_settings 'max_turns' has invalid type %s, "
+                        "expected int. Ignoring this setting.",
+                        type(max_turns_value).__name__,
+                    )
+
         cli = ClaudeCodeCLI(
             model=self._model_name,
             working_directory=self._working_directory,
@@ -179,6 +197,7 @@ class ClaudeCodeModel(Model):
             system_prompt=system_prompt,
             max_budget_usd=max_budget_usd,
             append_system_prompt=append_system_prompt,
+            max_turns=max_turns,
         )
 
         cli_response = await cli.execute(user_prompt)

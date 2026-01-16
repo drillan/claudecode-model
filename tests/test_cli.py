@@ -73,6 +73,7 @@ class TestClaudeCodeCLIInit:
         cli = ClaudeCodeCLI()
         assert cli.max_budget_usd is None
         assert cli.append_system_prompt is None
+        assert cli.max_turns is None
 
     def test_new_options_accept_values(self) -> None:
         """ClaudeCodeCLI should accept new option values."""
@@ -103,6 +104,21 @@ class TestClaudeCodeCLIInit:
         """ClaudeCodeCLI should accept empty string append_system_prompt."""
         cli = ClaudeCodeCLI(append_system_prompt="")
         assert cli.append_system_prompt == ""
+
+    def test_max_turns_accept_positive_value(self) -> None:
+        """ClaudeCodeCLI should accept positive max_turns."""
+        cli = ClaudeCodeCLI(max_turns=5)
+        assert cli.max_turns == 5
+
+    def test_max_turns_rejects_zero(self) -> None:
+        """ClaudeCodeCLI should reject zero max_turns."""
+        with pytest.raises(ValueError, match="max_turns must be a positive integer"):
+            ClaudeCodeCLI(max_turns=0)
+
+    def test_max_turns_rejects_negative(self) -> None:
+        """ClaudeCodeCLI should reject negative max_turns."""
+        with pytest.raises(ValueError, match="max_turns must be a positive integer"):
+            ClaudeCodeCLI(max_turns=-1)
 
 
 class TestClaudeCodeCLIFindCLI:
@@ -217,6 +233,14 @@ class TestClaudeCodeCLIBuildCommand:
             cmd = cli._build_command("test")
             assert "--append-system-prompt" in cmd
             assert "Be concise" in cmd
+
+    def test_includes_max_turns(self) -> None:
+        """_build_command should include max-turns if set."""
+        cli = ClaudeCodeCLI(max_turns=5)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--max-turns" in cmd
+            assert "5" in cmd
 
 
 class TestClaudeCodeCLIExecute:
