@@ -136,6 +136,7 @@ class ClaudeCodeModel(Model):
         max_budget_usd: float | None = None
         append_system_prompt: str | None = None
         max_turns: int | None = self._max_turns
+        working_directory: str | None = self._working_directory
 
         if model_settings is not None:
             timeout_value = model_settings.get("timeout")
@@ -188,9 +189,20 @@ class ClaudeCodeModel(Model):
                         type(max_turns_value).__name__,
                     )
 
+            wd_value = model_settings.get("working_directory")
+            if wd_value is not None:
+                if isinstance(wd_value, str):
+                    working_directory = wd_value
+                else:
+                    logger.warning(
+                        "model_settings 'working_directory' has invalid type %s, "
+                        "expected str. Using default working_directory.",
+                        type(wd_value).__name__,
+                    )
+
         cli = ClaudeCodeCLI(
             model=self._model_name,
-            working_directory=self._working_directory,
+            working_directory=working_directory,
             timeout=timeout,
             allowed_tools=self._allowed_tools,
             disallowed_tools=self._disallowed_tools,

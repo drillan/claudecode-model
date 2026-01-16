@@ -816,3 +816,149 @@ class TestClaudeCodeModelRequestWithMetadata:
 
         with pytest.raises(ValueError, match="No user prompt found"):
             await model.request_with_metadata(messages, None, params)
+
+
+class TestClaudeCodeModelWorkingDirectoryOverride:
+    """Tests for working_directory override via model_settings."""
+
+    @pytest.fixture
+    def mock_cli_response(self) -> CLIResponse:
+        """Return a mock CLI response."""
+        return CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Response from Claude",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_working_directory_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use working_directory from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"working_directory": "/custom/path"}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == "/custom/path"
+
+    @pytest.mark.asyncio
+    async def test_model_settings_working_directory_overrides_init(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should prefer working_directory from model_settings over __init__."""
+        model = ClaudeCodeModel(working_directory="/init/path")
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"working_directory": "/override/path"}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == "/override/path"
+
+    @pytest.mark.asyncio
+    async def test_uses_init_working_directory_when_not_in_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use working_directory from __init__ when not in model_settings."""
+        model = ClaudeCodeModel(working_directory="/init/path")
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == "/init/path"
+
+    @pytest.mark.asyncio
+    async def test_warns_on_invalid_type_working_directory(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when working_directory has invalid type."""
+        model = ClaudeCodeModel(working_directory="/init/path")
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"working_directory": 123}  # int instead of string
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert "working_directory" in caplog.text
+            assert "expected str" in caplog.text
+            # Should fall back to init value
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == "/init/path"
+
+    @pytest.mark.asyncio
+    async def test_working_directory_none_in_model_settings_uses_init(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use init value when model_settings working_directory is None."""
+        model = ClaudeCodeModel(working_directory="/init/path")
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"working_directory": None}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == "/init/path"
