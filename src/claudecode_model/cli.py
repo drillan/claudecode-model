@@ -32,7 +32,12 @@ class ClaudeCodeCLI:
         disallowed_tools: list[str] | None = None,
         permission_mode: str | None = None,
         system_prompt: str | None = None,
+        max_budget_usd: float | None = None,
+        append_system_prompt: str | None = None,
     ) -> None:
+        if max_budget_usd is not None and max_budget_usd < 0:
+            raise ValueError("max_budget_usd must be non-negative")
+
         self.model = model
         self.working_directory = working_directory
         self.timeout = timeout
@@ -40,6 +45,10 @@ class ClaudeCodeCLI:
         self.disallowed_tools = disallowed_tools
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
+        self.max_budget_usd = (
+            float(max_budget_usd) if max_budget_usd is not None else None
+        )
+        self.append_system_prompt = append_system_prompt
 
         self._cli_path: str | None = None
 
@@ -98,6 +107,12 @@ class ClaudeCodeCLI:
 
         if self.system_prompt:
             cmd.extend(["--system-prompt", self.system_prompt])
+
+        if self.max_budget_usd is not None:
+            cmd.extend(["--max-budget-usd", str(self.max_budget_usd)])
+
+        if self.append_system_prompt:
+            cmd.extend(["--append-system-prompt", self.append_system_prompt])
 
         cmd.append(prompt)
         return cmd

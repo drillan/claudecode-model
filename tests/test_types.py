@@ -7,6 +7,7 @@ from claudecode_model.types import (
     CLIResponse,
     CLIResponseData,
     CLIUsage,
+    ClaudeCodeModelSettings,
     parse_cli_response,
 )
 
@@ -209,3 +210,33 @@ class TestParseCLIResponse:
 
         with pytest.raises(ValidationError):
             parse_cli_response(invalid_data)
+
+
+class TestClaudeCodeModelSettings:
+    """Tests for ClaudeCodeModelSettings TypedDict."""
+
+    def test_accepts_timeout(self) -> None:
+        """ClaudeCodeModelSettings should accept timeout."""
+        settings: ClaudeCodeModelSettings = {"timeout": 60.0}
+        assert settings["timeout"] == 60.0
+
+    def test_accepts_max_budget_usd(self) -> None:
+        """ClaudeCodeModelSettings should accept max_budget_usd."""
+        settings: ClaudeCodeModelSettings = {"max_budget_usd": 1.0}
+        assert settings["max_budget_usd"] == 1.0
+
+    def test_accepts_append_system_prompt(self) -> None:
+        """ClaudeCodeModelSettings should accept append_system_prompt."""
+        settings: ClaudeCodeModelSettings = {"append_system_prompt": "Be concise"}
+        assert settings["append_system_prompt"] == "Be concise"
+
+    def test_accepts_all_options(self) -> None:
+        """ClaudeCodeModelSettings should accept all options together."""
+        settings: ClaudeCodeModelSettings = {
+            "timeout": 120.0,
+            "max_budget_usd": 0.5,
+            "append_system_prompt": "You are a helpful assistant.",
+        }
+        assert settings["timeout"] == 120.0
+        assert settings["max_budget_usd"] == 0.5
+        assert settings["append_system_prompt"] == "You are a helpful assistant."

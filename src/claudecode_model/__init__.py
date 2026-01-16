@@ -13,10 +13,17 @@ from claudecode_model.exceptions import (
     ClaudeCodeError,
 )
 from claudecode_model.model import ClaudeCodeModel
-from claudecode_model.types import CLIResponse, CLIResponseData, CLIUsage, CLIUsageData
+from claudecode_model.types import (
+    CLIResponse,
+    CLIResponseData,
+    CLIUsage,
+    CLIUsageData,
+    ClaudeCodeModelSettings,
+)
 
 __all__ = [
     "ClaudeCodeModel",
+    "ClaudeCodeModelSettings",
     "ClaudeCodeCLI",
     "CLIResponse",
     "CLIResponseData",
