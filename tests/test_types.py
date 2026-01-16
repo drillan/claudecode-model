@@ -236,7 +236,14 @@ class TestClaudeCodeModelSettings:
             "timeout": 120.0,
             "max_budget_usd": 0.5,
             "append_system_prompt": "You are a helpful assistant.",
+            "max_turns": 5,
         }
         assert settings["timeout"] == 120.0
         assert settings["max_budget_usd"] == 0.5
         assert settings["append_system_prompt"] == "You are a helpful assistant."
+        assert settings["max_turns"] == 5
+
+    def test_accepts_max_turns(self) -> None:
+        """ClaudeCodeModelSettings should accept max_turns."""
+        settings: ClaudeCodeModelSettings = {"max_turns": 10}
+        assert settings["max_turns"] == 10

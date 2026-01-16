@@ -49,6 +49,16 @@ class TestClaudeCodeModelInit:
         assert model._disallowed_tools == ["Bash"]
         assert model._permission_mode == "bypassPermissions"
 
+    def test_max_turns_default_to_none(self) -> None:
+        """ClaudeCodeModel max_turns should default to None."""
+        model = ClaudeCodeModel()
+        assert model._max_turns is None
+
+    def test_max_turns_accepts_positive_value(self) -> None:
+        """ClaudeCodeModel should accept positive max_turns."""
+        model = ClaudeCodeModel(max_turns=5)
+        assert model._max_turns == 5
+
 
 class TestClaudeCodeModelProperties:
     """Tests for ClaudeCodeModel properties."""
@@ -533,3 +543,119 @@ class TestClaudeCodeModelRequest:
             assert "expected str" in caplog.text
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs["append_system_prompt"] is None
+
+    @pytest.mark.asyncio
+    async def test_uses_max_turns_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use max_turns from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_turns": 5}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_turns"] == 5
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_positive_max_turns_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should raise ValueError for non-positive max_turns."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_turns": 0}
+
+        with pytest.raises(ValueError, match="max_turns must be a positive integer"):
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_warns_on_invalid_type_max_turns(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when max_turns has invalid type."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_turns": "5"}  # string instead of int
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert "max_turns" in caplog.text
+            assert "expected int" in caplog.text
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_turns"] is None
+
+    @pytest.mark.asyncio
+    async def test_uses_max_turns_from_init(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use max_turns from __init__ when model_settings not provided."""
+        model = ClaudeCodeModel(max_turns=3)
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_turns"] == 3
+
+    @pytest.mark.asyncio
+    async def test_model_settings_max_turns_overrides_init(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should prefer max_turns from model_settings over __init__."""
+        model = ClaudeCodeModel(max_turns=3)
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_turns": 10}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_turns"] == 10

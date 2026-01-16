@@ -34,9 +34,13 @@ class ClaudeCodeCLI:
         system_prompt: str | None = None,
         max_budget_usd: float | None = None,
         append_system_prompt: str | None = None,
+        max_turns: int | None = None,
     ) -> None:
         if max_budget_usd is not None and max_budget_usd < 0:
             raise ValueError("max_budget_usd must be non-negative")
+
+        if max_turns is not None and max_turns <= 0:
+            raise ValueError("max_turns must be a positive integer")
 
         self.model = model
         self.working_directory = working_directory
@@ -49,6 +53,7 @@ class ClaudeCodeCLI:
             float(max_budget_usd) if max_budget_usd is not None else None
         )
         self.append_system_prompt = append_system_prompt
+        self.max_turns = max_turns
 
         self._cli_path: str | None = None
 
@@ -113,6 +118,9 @@ class ClaudeCodeCLI:
 
         if self.append_system_prompt:
             cmd.extend(["--append-system-prompt", self.append_system_prompt])
+
+        if self.max_turns is not None:
+            cmd.extend(["--max-turns", str(self.max_turns)])
 
         cmd.append(prompt)
         return cmd
