@@ -15,12 +15,15 @@ from claudecode_model.exceptions import (
 )
 from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import (
+    CacheCreation,
     CLIResponse,
     CLIResponseData,
     CLIUsage,
     CLIUsageData,
     ClaudeCodeModelSettings,
+    ModelUsageData,
     RequestWithMetadataResult,
+    ServerToolUse,
 )
 
 __all__ = [
@@ -40,6 +43,9 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
     "MAX_PROMPT_LENGTH",
+    "ServerToolUse",
+    "CacheCreation",
+    "ModelUsageData",
 ]
 
 

@@ -4,12 +4,79 @@ import pytest
 from pydantic import ValidationError
 
 from claudecode_model.types import (
+    CacheCreation,
     CLIResponse,
     CLIResponseData,
     CLIUsage,
     ClaudeCodeModelSettings,
+    ModelUsageData,
+    ServerToolUse,
     parse_cli_response,
 )
+
+
+class TestServerToolUse:
+    """Tests for ServerToolUse model."""
+
+    def test_default_values(self) -> None:
+        """ServerToolUse should have default values of 0."""
+        server_tool_use = ServerToolUse()
+        assert server_tool_use.web_search_requests == 0
+        assert server_tool_use.web_fetch_requests == 0
+
+    def test_valid_values(self) -> None:
+        """ServerToolUse should accept valid values."""
+        server_tool_use = ServerToolUse(web_search_requests=5, web_fetch_requests=3)
+        assert server_tool_use.web_search_requests == 5
+        assert server_tool_use.web_fetch_requests == 3
+
+
+class TestCacheCreation:
+    """Tests for CacheCreation model."""
+
+    def test_default_values(self) -> None:
+        """CacheCreation should have default values of 0."""
+        cache_creation = CacheCreation()
+        assert cache_creation.ephemeral_1h_input_tokens == 0
+        assert cache_creation.ephemeral_5m_input_tokens == 0
+
+    def test_valid_values(self) -> None:
+        """CacheCreation should accept valid values."""
+        cache_creation = CacheCreation(
+            ephemeral_1h_input_tokens=100, ephemeral_5m_input_tokens=200
+        )
+        assert cache_creation.ephemeral_1h_input_tokens == 100
+        assert cache_creation.ephemeral_5m_input_tokens == 200
+
+
+class TestModelUsageData:
+    """Tests for ModelUsageData model."""
+
+    def test_requires_all_fields(self) -> None:
+        """ModelUsageData should require all fields."""
+        with pytest.raises(ValidationError):
+            ModelUsageData()  # type: ignore[call-arg]
+
+    def test_valid_values(self) -> None:
+        """ModelUsageData should accept valid values."""
+        model_usage = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=200,
+            cacheCreationInputTokens=300,
+            webSearchRequests=1,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        assert model_usage.inputTokens == 100
+        assert model_usage.outputTokens == 50
+        assert model_usage.cacheReadInputTokens == 200
+        assert model_usage.cacheCreationInputTokens == 300
+        assert model_usage.webSearchRequests == 1
+        assert model_usage.costUSD == 0.05
+        assert model_usage.contextWindow == 200000
+        assert model_usage.maxOutputTokens == 64000
 
 
 class TestCLIUsage:
@@ -32,6 +99,38 @@ class TestCLIUsage:
         assert usage.output_tokens == 50
         assert usage.cache_creation_input_tokens == 10
         assert usage.cache_read_input_tokens == 5
+
+    def test_new_optional_fields_with_defaults(self) -> None:
+        """CLIUsage should have new optional fields with defaults."""
+        usage = CLIUsage(
+            input_tokens=100,
+            output_tokens=50,
+            cache_creation_input_tokens=10,
+            cache_read_input_tokens=5,
+        )
+        assert usage.server_tool_use is None
+        assert usage.service_tier is None
+        assert usage.cache_creation is None
+
+    def test_new_optional_fields_with_values(self) -> None:
+        """CLIUsage should accept new optional fields."""
+        usage = CLIUsage(
+            input_tokens=100,
+            output_tokens=50,
+            cache_creation_input_tokens=10,
+            cache_read_input_tokens=5,
+            server_tool_use=ServerToolUse(web_search_requests=1, web_fetch_requests=2),
+            service_tier="standard",
+            cache_creation=CacheCreation(
+                ephemeral_1h_input_tokens=0, ephemeral_5m_input_tokens=7365
+            ),
+        )
+        assert usage.server_tool_use is not None
+        assert usage.server_tool_use.web_search_requests == 1
+        assert usage.server_tool_use.web_fetch_requests == 2
+        assert usage.service_tier == "standard"
+        assert usage.cache_creation is not None
+        assert usage.cache_creation.ephemeral_5m_input_tokens == 7365
 
 
 class TestCLIResponse:
@@ -83,6 +182,47 @@ class TestCLIResponse:
         )
         assert response.session_id is None
         assert response.total_cost_usd is None
+        assert response.model_usage is None
+        assert response.permission_denials is None
+        assert response.uuid is None
+
+    def test_new_optional_fields_with_values(self) -> None:
+        """CLIResponse should accept new optional fields."""
+        model_usage_data = ModelUsageData(
+            inputTokens=2,
+            outputTokens=13,
+            cacheReadInputTokens=16464,
+            cacheCreationInputTokens=7365,
+            webSearchRequests=0,
+            costUSD=0.05459825,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=2778,
+            duration_api_ms=2751,
+            num_turns=1,
+            result="1 + 1 = 2",
+            session_id="7d696607-e82d-494f-a633-f55acb3f3c44",
+            total_cost_usd=0.05459825,
+            usage=CLIUsage(
+                input_tokens=2,
+                output_tokens=13,
+                cache_creation_input_tokens=7365,
+                cache_read_input_tokens=16464,
+            ),
+            modelUsage={"claude-opus-4-5-20251101": model_usage_data},
+            permission_denials=[],
+            uuid="0364bc35-e562-4b82-8b8b-f6c80677d13a",
+        )
+        assert response.model_usage is not None
+        assert "claude-opus-4-5-20251101" in response.model_usage
+        assert response.model_usage["claude-opus-4-5-20251101"].inputTokens == 2
+        assert response.permission_denials == []
+        assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
 
     def test_rejects_extra_fields(self) -> None:
         """CLIResponse should reject extra fields (extra='forbid')."""
@@ -210,6 +350,65 @@ class TestParseCLIResponse:
 
         with pytest.raises(ValidationError):
             parse_cli_response(invalid_data)
+
+    def test_parses_full_cli_response_with_new_fields(self) -> None:
+        """parse_cli_response should parse full CLI response with new fields."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 2778,
+            "duration_api_ms": 2751,
+            "num_turns": 1,
+            "result": "1 + 1 = 2",
+            "session_id": "7d696607-e82d-494f-a633-f55acb3f3c44",
+            "total_cost_usd": 0.05459825,
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 13,
+                "cache_creation_input_tokens": 7365,
+                "cache_read_input_tokens": 16464,
+                "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0,
+                },
+                "service_tier": "standard",
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 7365,
+                },
+            },
+            "model_usage": {
+                "claude-opus-4-5-20251101": {
+                    "inputTokens": 2,
+                    "outputTokens": 13,
+                    "cacheReadInputTokens": 16464,
+                    "cacheCreationInputTokens": 7365,
+                    "webSearchRequests": 0,
+                    "costUSD": 0.05459825,
+                    "contextWindow": 200000,
+                    "maxOutputTokens": 64000,
+                }
+            },
+            "permission_denials": [],
+            "uuid": "0364bc35-e562-4b82-8b8b-f6c80677d13a",
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.type == "result"
+        assert response.result == "1 + 1 = 2"
+        assert response.usage.input_tokens == 2
+        assert response.usage.server_tool_use is not None
+        assert response.usage.server_tool_use.web_search_requests == 0
+        assert response.usage.service_tier == "standard"
+        assert response.usage.cache_creation is not None
+        assert response.usage.cache_creation.ephemeral_5m_input_tokens == 7365
+        assert response.model_usage is not None
+        assert "claude-opus-4-5-20251101" in response.model_usage
+        assert response.model_usage["claude-opus-4-5-20251101"].inputTokens == 2
+        assert response.permission_denials == []
+        assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
 
 
 class TestClaudeCodeModelSettings:

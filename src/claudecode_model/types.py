@@ -30,6 +30,60 @@ class ClaudeCodeModelSettings(ModelSettings, total=False):
     working_directory: str
 
 
+class ServerToolUse(BaseModel):
+    """Server-side tool usage data from CLI response."""
+
+    web_search_requests: int = Field(default=0, ge=0)
+    web_fetch_requests: int = Field(default=0, ge=0)
+
+
+class CacheCreation(BaseModel):
+    """Cache creation details from CLI response."""
+
+    ephemeral_1h_input_tokens: int = Field(default=0, ge=0)
+    ephemeral_5m_input_tokens: int = Field(default=0, ge=0)
+
+
+class ModelUsageData(BaseModel):
+    """Per-model usage data from CLI response."""
+
+    inputTokens: int = Field(ge=0)
+    outputTokens: int = Field(ge=0)
+    cacheReadInputTokens: int = Field(ge=0)
+    cacheCreationInputTokens: int = Field(ge=0)
+    webSearchRequests: int = Field(ge=0)
+    costUSD: float = Field(ge=0)
+    contextWindow: int = Field(ge=0)
+    maxOutputTokens: int = Field(ge=0)
+
+
+class ServerToolUseData(TypedDict, total=False):
+    """TypedDict for server tool use data from JSON."""
+
+    web_search_requests: int
+    web_fetch_requests: int
+
+
+class CacheCreationData(TypedDict, total=False):
+    """TypedDict for cache creation data from JSON."""
+
+    ephemeral_1h_input_tokens: int
+    ephemeral_5m_input_tokens: int
+
+
+class ModelUsageDataDict(TypedDict, total=False):
+    """TypedDict for model usage data from JSON."""
+
+    inputTokens: int
+    outputTokens: int
+    cacheReadInputTokens: int
+    cacheCreationInputTokens: int
+    webSearchRequests: int
+    costUSD: float
+    contextWindow: int
+    maxOutputTokens: int
+
+
 class CLIUsageData(TypedDict, total=False):
     """TypedDict for CLI usage data from JSON."""
 
@@ -37,6 +91,9 @@ class CLIUsageData(TypedDict, total=False):
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    server_tool_use: ServerToolUseData
+    service_tier: str
+    cache_creation: CacheCreationData
 
 
 class CLIResponseData(TypedDict, total=False):
@@ -52,6 +109,9 @@ class CLIResponseData(TypedDict, total=False):
     session_id: str | None
     total_cost_usd: float | None
     usage: CLIUsageData
+    model_usage: dict[str, ModelUsageDataDict]
+    permission_denials: list[str]
+    uuid: str
 
 
 class CLIUsage(BaseModel):
@@ -61,6 +121,9 @@ class CLIUsage(BaseModel):
     output_tokens: int = Field(ge=0)
     cache_creation_input_tokens: int = Field(ge=0)
     cache_read_input_tokens: int = Field(ge=0)
+    server_tool_use: ServerToolUse | None = None
+    service_tier: str | None = None
+    cache_creation: CacheCreation | None = None
 
 
 class CLIResponse(BaseModel):
@@ -76,8 +139,13 @@ class CLIResponse(BaseModel):
     session_id: str | None = None
     total_cost_usd: float | None = None
     usage: CLIUsage
+    model_usage: dict[str, ModelUsageData] | None = Field(
+        default=None, alias="modelUsage"
+    )
+    permission_denials: list[str] | None = None
+    uuid: str | None = None
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "populate_by_name": True}
 
     def to_model_response(self, model_name: str | None = None) -> ModelResponse:
         """Convert CLI response to pydantic-ai ModelResponse."""
