@@ -308,9 +308,11 @@ class TestClaudeCodeCLIExecute:
                 return_value=mock_process,
             ),
         ):
-            with pytest.raises(CLIExecutionError, match="timed out"):
+            with pytest.raises(CLIExecutionError, match="timed out") as exc_info:
                 await cli.execute("Hello")
             mock_process.kill.assert_called_once()
+            assert exc_info.value.error_type == "timeout"
+            assert exc_info.value.recoverable is True
 
     @pytest.mark.asyncio
     async def test_file_not_found_error(self) -> None:
@@ -339,8 +341,12 @@ class TestClaudeCodeCLIExecute:
                 side_effect=PermissionError("permission denied"),
             ),
         ):
-            with pytest.raises(CLIExecutionError, match="Permission denied"):
+            with pytest.raises(
+                CLIExecutionError, match="Permission denied"
+            ) as exc_info:
                 await cli.execute("Hello")
+            assert exc_info.value.error_type == "permission"
+            assert exc_info.value.recoverable is False
 
     @pytest.mark.asyncio
     async def test_os_error(self) -> None:
@@ -354,8 +360,10 @@ class TestClaudeCodeCLIExecute:
                 side_effect=OSError("os error"),
             ),
         ):
-            with pytest.raises(CLIExecutionError, match="OS error"):
+            with pytest.raises(CLIExecutionError, match="OS error") as exc_info:
                 await cli.execute("Hello")
+            assert exc_info.value.error_type == "unknown"
+            assert exc_info.value.recoverable is False
 
     @pytest.mark.asyncio
     async def test_non_zero_exit_code(self) -> None:
@@ -373,8 +381,12 @@ class TestClaudeCodeCLIExecute:
                 return_value=mock_process,
             ),
         ):
-            with pytest.raises(CLIExecutionError, match="exited with code 1"):
+            with pytest.raises(
+                CLIExecutionError, match="exited with code 1"
+            ) as exc_info:
                 await cli.execute("Hello")
+            assert exc_info.value.error_type == "unknown"
+            assert exc_info.value.recoverable is False
 
     @pytest.mark.asyncio
     async def test_invalid_json_response(self) -> None:
@@ -451,8 +463,12 @@ class TestClaudeCodeCLIExecute:
                 return_value=mock_process,
             ),
         ):
-            with pytest.raises(CLIExecutionError, match="CLI reported error"):
+            with pytest.raises(
+                CLIExecutionError, match="CLI reported error"
+            ) as exc_info:
                 await cli.execute("Hello")
+            assert exc_info.value.error_type == "invalid_response"
+            assert exc_info.value.recoverable is False
 
     @pytest.mark.asyncio
     async def test_cancelled_error_cleanup(self) -> None:

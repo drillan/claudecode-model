@@ -11,6 +11,7 @@ from claudecode_model.exceptions import (
     CLINotFoundError,
     CLIResponseParseError,
     ClaudeCodeError,
+    ErrorType,
 )
 from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import (
@@ -33,6 +34,7 @@ __all__ = [
     "CLINotFoundError",
     "CLIExecutionError",
     "CLIResponseParseError",
+    "ErrorType",
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
     "MAX_PROMPT_LENGTH",
