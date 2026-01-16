@@ -1,5 +1,6 @@
 """Tests for claudecode_model.model module."""
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -309,3 +310,226 @@ class TestClaudeCodeModelRequest:
 
         with pytest.raises(ValueError, match="No user prompt found"):
             await model.request(messages, None, params)
+
+    @pytest.mark.asyncio
+    async def test_uses_max_budget_usd_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use max_budget_usd from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_budget_usd": 1.5}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_budget_usd"] == 1.5
+
+    @pytest.mark.asyncio
+    async def test_uses_append_system_prompt_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use append_system_prompt from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"append_system_prompt": "Be concise."}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["append_system_prompt"] == "Be concise."
+
+    @pytest.mark.asyncio
+    async def test_uses_all_new_options_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use all new options from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {
+            "timeout": 60.0,
+            "max_budget_usd": 2.0,
+            "append_system_prompt": "Keep it brief.",
+        }
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["timeout"] == 60.0
+            assert call_kwargs["max_budget_usd"] == 2.0
+            assert call_kwargs["append_system_prompt"] == "Keep it brief."
+
+    @pytest.mark.asyncio
+    async def test_rejects_negative_max_budget_usd_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should raise ValueError for negative max_budget_usd."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_budget_usd": -1.0}
+
+        with pytest.raises(ValueError, match="max_budget_usd must be non-negative"):
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_converts_integer_max_budget_usd_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should convert integer max_budget_usd to float."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_budget_usd": 5}  # integer
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_budget_usd"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_string_append_system_prompt_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should accept empty string append_system_prompt."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"append_system_prompt": ""}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["append_system_prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_warns_on_invalid_type_max_budget_usd(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when max_budget_usd has invalid type."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_budget_usd": "1.5"}  # string instead of float
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert "max_budget_usd" in caplog.text
+            assert "expected int or float" in caplog.text
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_budget_usd"] is None
+
+    @pytest.mark.asyncio
+    async def test_warns_on_invalid_type_timeout(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when timeout has invalid type."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"timeout": "60"}  # string instead of float
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert "timeout" in caplog.text
+            assert "expected int or float" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_warns_on_invalid_type_append_system_prompt(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when append_system_prompt has invalid type."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"append_system_prompt": 123}  # int instead of string
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert "append_system_prompt" in caplog.text
+            assert "expected str" in caplog.text
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["append_system_prompt"] is None

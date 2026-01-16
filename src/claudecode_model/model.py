@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,8 @@ from claudecode_model.cli import (
 if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestParameters
     from pydantic_ai.settings import ModelSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeModel(Model):
@@ -125,11 +128,46 @@ class ClaudeCodeModel(Model):
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
 
+        # Extract settings from model_settings
         timeout = self._timeout
+        max_budget_usd: float | None = None
+        append_system_prompt: str | None = None
+
         if model_settings is not None:
             timeout_value = model_settings.get("timeout")
-            if timeout_value is not None and isinstance(timeout_value, (int, float)):
-                timeout = float(timeout_value)
+            if timeout_value is not None:
+                if isinstance(timeout_value, (int, float)):
+                    timeout = float(timeout_value)
+                else:
+                    logger.warning(
+                        "model_settings 'timeout' has invalid type %s, "
+                        "expected int or float. Using default timeout.",
+                        type(timeout_value).__name__,
+                    )
+
+            max_budget_value = model_settings.get("max_budget_usd")
+            if max_budget_value is not None:
+                if isinstance(max_budget_value, (int, float)):
+                    max_budget_usd = float(max_budget_value)
+                    if max_budget_usd < 0:
+                        raise ValueError("max_budget_usd must be non-negative")
+                else:
+                    logger.warning(
+                        "model_settings 'max_budget_usd' has invalid type %s, "
+                        "expected int or float. Ignoring this setting.",
+                        type(max_budget_value).__name__,
+                    )
+
+            append_prompt_value = model_settings.get("append_system_prompt")
+            if append_prompt_value is not None:
+                if isinstance(append_prompt_value, str):
+                    append_system_prompt = append_prompt_value
+                else:
+                    logger.warning(
+                        "model_settings 'append_system_prompt' has invalid type %s, "
+                        "expected str. Ignoring this setting.",
+                        type(append_prompt_value).__name__,
+                    )
 
         cli = ClaudeCodeCLI(
             model=self._model_name,
@@ -139,6 +177,8 @@ class ClaudeCodeModel(Model):
             disallowed_tools=self._disallowed_tools,
             permission_mode=self._permission_mode,
             system_prompt=system_prompt,
+            max_budget_usd=max_budget_usd,
+            append_system_prompt=append_system_prompt,
         )
 
         cli_response = await cli.execute(user_prompt)
