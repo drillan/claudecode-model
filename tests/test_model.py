@@ -309,3 +309,81 @@ class TestClaudeCodeModelRequest:
 
         with pytest.raises(ValueError, match="No user prompt found"):
             await model.request(messages, None, params)
+
+    @pytest.mark.asyncio
+    async def test_uses_max_budget_usd_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use max_budget_usd from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"max_budget_usd": 1.5}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["max_budget_usd"] == 1.5
+
+    @pytest.mark.asyncio
+    async def test_uses_append_system_prompt_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use append_system_prompt from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"append_system_prompt": "Be concise."}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["append_system_prompt"] == "Be concise."
+
+    @pytest.mark.asyncio
+    async def test_uses_all_new_options_from_model_settings(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should use all new options from model_settings if provided."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {
+            "timeout": 60.0,
+            "max_budget_usd": 2.0,
+            "append_system_prompt": "Keep it brief.",
+        }
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["timeout"] == 60.0
+            assert call_kwargs["max_budget_usd"] == 2.0
+            assert call_kwargs["append_system_prompt"] == "Keep it brief."

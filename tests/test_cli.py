@@ -68,6 +68,21 @@ class TestClaudeCodeCLIInit:
         assert cli.permission_mode == "bypassPermissions"
         assert cli.system_prompt == "You are a helpful assistant."
 
+    def test_new_options_default_to_none(self) -> None:
+        """ClaudeCodeCLI new options should default to None."""
+        cli = ClaudeCodeCLI()
+        assert cli.max_budget_usd is None
+        assert cli.append_system_prompt is None
+
+    def test_new_options_accept_values(self) -> None:
+        """ClaudeCodeCLI should accept new option values."""
+        cli = ClaudeCodeCLI(
+            max_budget_usd=1.5,
+            append_system_prompt="Be concise.",
+        )
+        assert cli.max_budget_usd == 1.5
+        assert cli.append_system_prompt == "Be concise."
+
 
 class TestClaudeCodeCLIFindCLI:
     """Tests for ClaudeCodeCLI._find_cli method."""
@@ -165,6 +180,22 @@ class TestClaudeCodeCLIBuildCommand:
         with patch("shutil.which", return_value="/usr/bin/claude"):
             with pytest.raises(ValueError, match="exceeds maximum length"):
                 cli._build_command(long_prompt)
+
+    def test_includes_max_budget_usd(self) -> None:
+        """_build_command should include max-budget-usd if set."""
+        cli = ClaudeCodeCLI(max_budget_usd=1.5)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--max-budget-usd" in cmd
+            assert "1.5" in cmd
+
+    def test_includes_append_system_prompt(self) -> None:
+        """_build_command should include append-system-prompt if set."""
+        cli = ClaudeCodeCLI(append_system_prompt="Be concise")
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--append-system-prompt" in cmd
+            assert "Be concise" in cmd
 
 
 class TestClaudeCodeCLIExecute:

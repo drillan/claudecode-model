@@ -125,11 +125,25 @@ class ClaudeCodeModel(Model):
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
 
+        # Extract settings from model_settings
         timeout = self._timeout
+        max_budget_usd: float | None = None
+        append_system_prompt: str | None = None
+
         if model_settings is not None:
             timeout_value = model_settings.get("timeout")
             if timeout_value is not None and isinstance(timeout_value, (int, float)):
                 timeout = float(timeout_value)
+
+            max_budget_value = model_settings.get("max_budget_usd")
+            if max_budget_value is not None and isinstance(
+                max_budget_value, (int, float)
+            ):
+                max_budget_usd = float(max_budget_value)
+
+            append_prompt_value = model_settings.get("append_system_prompt")
+            if append_prompt_value is not None and isinstance(append_prompt_value, str):
+                append_system_prompt = append_prompt_value
 
         cli = ClaudeCodeCLI(
             model=self._model_name,
@@ -139,6 +153,8 @@ class ClaudeCodeModel(Model):
             disallowed_tools=self._disallowed_tools,
             permission_mode=self._permission_mode,
             system_prompt=system_prompt,
+            max_budget_usd=max_budget_usd,
+            append_system_prompt=append_system_prompt,
         )
 
         cli_response = await cli.execute(user_prompt)

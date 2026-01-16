@@ -6,7 +6,23 @@ from typing import TypedDict
 
 from pydantic import BaseModel, Field
 from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
+
+
+class ClaudeCodeModelSettings(ModelSettings, total=False):
+    """Extended ModelSettings for Claude Code CLI.
+
+    Inherits from pydantic-ai ModelSettings and adds Claude CLI-specific options.
+
+    Attributes:
+        timeout: Request timeout in seconds (inherited from ModelSettings).
+        max_budget_usd: Maximum budget in USD for the request.
+        append_system_prompt: Additional system prompt to append.
+    """
+
+    max_budget_usd: float
+    append_system_prompt: str
 
 
 class CLIUsageData(TypedDict, total=False):
