@@ -25,6 +25,11 @@
 - エラー: 解決方法を含める
 - 終了コード: 0=成功, 非0=失敗
 
+## GitHub CLI (gh)
+
+- Claude Code on the Webでは`-R owner/repo`フラグが必須
+- 例: `gh pr list -R owner/repo`, `gh issue view 123 -R owner/repo`
+
 ## 禁止事項
 
 - マジックナンバー・ハードコード値
