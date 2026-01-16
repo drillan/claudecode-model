@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.usage import RequestUsage
 
@@ -36,10 +36,10 @@ class CLIResponseData(TypedDict, total=False):
 class CLIUsage(BaseModel):
     """Token usage information from CLI response."""
 
-    input_tokens: int
-    output_tokens: int
-    cache_creation_input_tokens: int
-    cache_read_input_tokens: int
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cache_creation_input_tokens: int = Field(ge=0)
+    cache_read_input_tokens: int = Field(ge=0)
 
 
 class CLIResponse(BaseModel):
