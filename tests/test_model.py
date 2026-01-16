@@ -962,3 +962,27 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
 
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs["working_directory"] == "/init/path"
+
+    @pytest.mark.asyncio
+    async def test_accepts_empty_string_working_directory(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should accept empty string working_directory."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"working_directory": ""}
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs["working_directory"] == ""
