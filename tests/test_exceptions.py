@@ -94,16 +94,16 @@ class TestCLIExecutionError:
     def test_stores_all_structured_attributes(self) -> None:
         """CLIExecutionError should store all structured error attributes."""
         error = CLIExecutionError(
-            "Rate limit exceeded",
-            exit_code=1,
-            stderr="rate limit error",
-            error_type="rate_limit",
+            "CLI execution timed out",
+            exit_code=-9,
+            stderr="Process killed due to timeout",
+            error_type="timeout",
             recoverable=True,
         )
-        assert str(error) == "Rate limit exceeded"
-        assert error.exit_code == 1
-        assert error.stderr == "rate limit error"
-        assert error.error_type == "rate_limit"
+        assert str(error) == "CLI execution timed out"
+        assert error.exit_code == -9
+        assert error.stderr == "Process killed due to timeout"
+        assert error.error_type == "timeout"
         assert error.recoverable is True
 
     def test_timeout_error_type(self) -> None:
