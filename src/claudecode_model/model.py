@@ -117,7 +117,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (temperature, etc.).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
 
         Returns:
             CLIResponse containing the raw CLI output with all metadata.
@@ -213,7 +213,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (temperature, etc.).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
@@ -242,7 +242,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (temperature, etc.).
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
