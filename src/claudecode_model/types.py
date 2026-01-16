@@ -45,16 +45,23 @@ class CacheCreation(BaseModel):
 
 
 class ModelUsageData(BaseModel):
-    """Per-model usage data from CLI response."""
+    """Per-model usage data from CLI response.
 
-    inputTokens: int = Field(ge=0)
-    outputTokens: int = Field(ge=0)
-    cacheReadInputTokens: int = Field(ge=0)
-    cacheCreationInputTokens: int = Field(ge=0)
-    webSearchRequests: int = Field(ge=0)
-    costUSD: float = Field(ge=0)
-    contextWindow: int = Field(ge=0)
-    maxOutputTokens: int = Field(ge=0)
+    Field names use snake_case internally with camelCase aliases for JSON compatibility.
+    The CLI JSON response uses camelCase (e.g., inputTokens), but internal access
+    uses snake_case (e.g., input_tokens).
+    """
+
+    input_tokens: int = Field(ge=0, alias="inputTokens")
+    output_tokens: int = Field(ge=0, alias="outputTokens")
+    cache_read_input_tokens: int = Field(ge=0, alias="cacheReadInputTokens")
+    cache_creation_input_tokens: int = Field(ge=0, alias="cacheCreationInputTokens")
+    web_search_requests: int = Field(ge=0, alias="webSearchRequests")
+    cost_usd: float = Field(ge=0, alias="costUSD")
+    context_window: int = Field(ge=0, alias="contextWindow")
+    max_output_tokens: int = Field(ge=0, alias="maxOutputTokens")
+
+    model_config = {"populate_by_name": True}
 
 
 class ServerToolUseData(TypedDict, total=False):
