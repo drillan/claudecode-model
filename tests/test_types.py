@@ -163,6 +163,139 @@ class TestModelUsageData:
                 maxOutputTokens=0,
             )
 
+    def test_rejects_negative_cache_read_input_tokens(self) -> None:
+        """ModelUsageData should reject negative cache_read_input_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=-1,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_cache_creation_input_tokens(self) -> None:
+        """ModelUsageData should reject negative cache_creation_input_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=-1,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_web_search_requests(self) -> None:
+        """ModelUsageData should reject negative web_search_requests."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=-1,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_context_window(self) -> None:
+        """ModelUsageData should reject negative context_window."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=-1,
+                maxOutputTokens=0,
+            )
+
+    def test_rejects_negative_max_output_tokens(self) -> None:
+        """ModelUsageData should reject negative max_output_tokens."""
+        with pytest.raises(ValidationError):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=-1,
+            )
+
+    def test_model_dump_uses_alias_by_default(self) -> None:
+        """ModelUsageData.model_dump should use camelCase aliases by default."""
+        model_usage = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=200,
+            cacheCreationInputTokens=300,
+            webSearchRequests=1,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        dumped = model_usage.model_dump(by_alias=True)
+        assert "inputTokens" in dumped
+        assert "outputTokens" in dumped
+        assert "cacheReadInputTokens" in dumped
+        assert "cacheCreationInputTokens" in dumped
+        assert "webSearchRequests" in dumped
+        assert "costUSD" in dumped
+        assert "contextWindow" in dumped
+        assert "maxOutputTokens" in dumped
+        assert dumped["inputTokens"] == 100
+        assert dumped["costUSD"] == 0.05
+
+    def test_model_dump_uses_field_names(self) -> None:
+        """ModelUsageData.model_dump should use snake_case field names."""
+        model_usage = ModelUsageData(
+            inputTokens=100,
+            outputTokens=50,
+            cacheReadInputTokens=200,
+            cacheCreationInputTokens=300,
+            webSearchRequests=1,
+            costUSD=0.05,
+            contextWindow=200000,
+            maxOutputTokens=64000,
+        )
+        dumped = model_usage.model_dump()
+        assert "input_tokens" in dumped
+        assert "output_tokens" in dumped
+        assert "cache_read_input_tokens" in dumped
+        assert "cache_creation_input_tokens" in dumped
+        assert "web_search_requests" in dumped
+        assert "cost_usd" in dumped
+        assert "context_window" in dumped
+        assert "max_output_tokens" in dumped
+        assert dumped["input_tokens"] == 100
+        assert dumped["cost_usd"] == 0.05
+
+    def test_rejects_extra_fields(self) -> None:
+        """ModelUsageData should reject extra fields (extra='forbid')."""
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            ModelUsageData(
+                inputTokens=0,
+                outputTokens=0,
+                cacheReadInputTokens=0,
+                cacheCreationInputTokens=0,
+                webSearchRequests=0,
+                costUSD=0.0,
+                contextWindow=0,
+                maxOutputTokens=0,
+                unknownField=123,  # type: ignore[call-arg]
+            )
+
 
 class TestCLIUsage:
     """Tests for CLIUsage model."""

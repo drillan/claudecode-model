@@ -50,6 +50,14 @@ class ModelUsageData(BaseModel):
     Field names use snake_case internally with camelCase aliases for JSON compatibility.
     The CLI JSON response uses camelCase (e.g., inputTokens), but internal access
     uses snake_case (e.g., input_tokens).
+
+    With populate_by_name=True, both formats are accepted for input:
+        - camelCase (JSON format): ModelUsageData(inputTokens=100, ...)
+        - snake_case (internal): ModelUsageData.model_validate({"input_tokens": 100, ...})
+
+    Serialization:
+        - model_dump(): returns snake_case keys
+        - model_dump(by_alias=True): returns camelCase keys (for JSON output)
     """
 
     input_tokens: int = Field(ge=0, alias="inputTokens")
@@ -61,7 +69,7 @@ class ModelUsageData(BaseModel):
     context_window: int = Field(ge=0, alias="contextWindow")
     max_output_tokens: int = Field(ge=0, alias="maxOutputTokens")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"extra": "forbid", "populate_by_name": True}
 
 
 class ServerToolUseData(TypedDict, total=False):
