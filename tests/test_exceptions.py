@@ -52,6 +52,8 @@ class TestCLIExecutionError:
         assert str(error) == "execution failed"
         assert error.exit_code is None
         assert error.stderr == ""
+        assert error.error_type is None
+        assert error.recoverable is False
 
     def test_stores_exit_code(self) -> None:
         """CLIExecutionError should store exit code."""
@@ -78,6 +80,90 @@ class TestCLIExecutionError:
         """CLIExecutionError should be catchable as ClaudeCodeError."""
         with pytest.raises(ClaudeCodeError):
             raise CLIExecutionError("test")
+
+    def test_stores_error_type(self) -> None:
+        """CLIExecutionError should store error_type."""
+        error = CLIExecutionError("timeout", error_type="timeout")
+        assert error.error_type == "timeout"
+
+    def test_stores_recoverable(self) -> None:
+        """CLIExecutionError should store recoverable flag."""
+        error = CLIExecutionError("rate limited", recoverable=True)
+        assert error.recoverable is True
+
+    def test_stores_all_structured_attributes(self) -> None:
+        """CLIExecutionError should store all structured error attributes."""
+        error = CLIExecutionError(
+            "Rate limit exceeded",
+            exit_code=1,
+            stderr="rate limit error",
+            error_type="rate_limit",
+            recoverable=True,
+        )
+        assert str(error) == "Rate limit exceeded"
+        assert error.exit_code == 1
+        assert error.stderr == "rate limit error"
+        assert error.error_type == "rate_limit"
+        assert error.recoverable is True
+
+    def test_timeout_error_type(self) -> None:
+        """CLIExecutionError should support timeout error type."""
+        error = CLIExecutionError(
+            "CLI execution timed out",
+            exit_code=-9,
+            stderr="Process was killed due to timeout",
+            error_type="timeout",
+            recoverable=True,
+        )
+        assert error.error_type == "timeout"
+        assert error.recoverable is True
+
+    def test_permission_error_type(self) -> None:
+        """CLIExecutionError should support permission error type."""
+        error = CLIExecutionError(
+            "Permission denied",
+            error_type="permission",
+            recoverable=False,
+        )
+        assert error.error_type == "permission"
+        assert error.recoverable is False
+
+    def test_cli_not_found_error_type(self) -> None:
+        """CLIExecutionError should support cli_not_found error type."""
+        error = CLIExecutionError(
+            "CLI not found",
+            exit_code=127,
+            error_type="cli_not_found",
+            recoverable=False,
+        )
+        assert error.error_type == "cli_not_found"
+        assert error.recoverable is False
+
+    def test_invalid_response_error_type(self) -> None:
+        """CLIExecutionError should support invalid_response error type."""
+        error = CLIExecutionError(
+            "Invalid response",
+            error_type="invalid_response",
+            recoverable=False,
+        )
+        assert error.error_type == "invalid_response"
+        assert error.recoverable is False
+
+    def test_unknown_error_type(self) -> None:
+        """CLIExecutionError should support unknown error type."""
+        error = CLIExecutionError(
+            "Unknown error occurred",
+            exit_code=1,
+            error_type="unknown",
+            recoverable=False,
+        )
+        assert error.error_type == "unknown"
+        assert error.recoverable is False
+
+    def test_default_recoverable_is_false(self) -> None:
+        """CLIExecutionError recoverable should default to False."""
+        error = CLIExecutionError("error", error_type="timeout")
+        assert error.recoverable is False
 
 
 class TestCLIResponseParseError:

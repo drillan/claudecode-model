@@ -165,6 +165,8 @@ class ClaudeCodeCLI:
                 "Consider increasing the timeout or simplifying the request.",
                 exit_code=-9,
                 stderr="Process was killed due to timeout",
+                error_type="timeout",
+                recoverable=True,
             ) from e
         except asyncio.CancelledError:
             if process is not None:
@@ -183,6 +185,8 @@ class ClaudeCodeCLI:
                 f"Check file permissions: {e}",
                 exit_code=None,
                 stderr=str(e),
+                error_type="permission",
+                recoverable=False,
             ) from e
         except OSError as e:
             raise CLIExecutionError(
@@ -190,6 +194,8 @@ class ClaudeCodeCLI:
                 f"Working directory: {self.working_directory}",
                 exit_code=None,
                 stderr=str(e),
+                error_type="unknown",
+                recoverable=False,
             ) from e
 
         try:
@@ -206,6 +212,8 @@ class ClaudeCodeCLI:
                 f"CLI exited with code {process.returncode}",
                 exit_code=process.returncode,
                 stderr=stderr_str,
+                error_type="unknown",
+                recoverable=False,
             )
 
         try:
@@ -223,6 +231,8 @@ class ClaudeCodeCLI:
                 f"CLI reported error: {response.result or 'Unknown error'}",
                 exit_code=process.returncode,
                 stderr=response.result,
+                error_type="invalid_response",
+                recoverable=False,
             )
 
         return response
