@@ -912,10 +912,10 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
             assert call_kwargs["working_directory"] == "/init/path"
 
     @pytest.mark.asyncio
-    async def test_warns_on_invalid_type_working_directory(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+    async def test_raises_on_invalid_type_working_directory(
+        self, mock_cli_response: CLIResponse
     ) -> None:
-        """request should warn when working_directory has invalid type."""
+        """request should raise TypeError when working_directory has invalid type."""
         model = ClaudeCodeModel(working_directory="/init/path")
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -926,18 +926,8 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
         )
         settings = {"working_directory": 123}  # int instead of string
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
-
-            with caplog.at_level(logging.WARNING):
-                await model.request(messages, settings, params)  # type: ignore[arg-type]
-
-            assert "working_directory" in caplog.text
-            assert "expected str" in caplog.text
-            # Should fall back to init value
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == "/init/path"
+        with pytest.raises(TypeError, match="working_directory.*must be str.*got int"):
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_working_directory_none_in_model_settings_uses_init(
@@ -964,10 +954,10 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
             assert call_kwargs["working_directory"] == "/init/path"
 
     @pytest.mark.asyncio
-    async def test_accepts_empty_string_working_directory(
-        self, mock_cli_response: CLIResponse
+    async def test_warns_on_empty_string_working_directory(
+        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """request should accept empty string working_directory."""
+        """request should warn when working_directory is empty string."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -982,7 +972,10 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
             mock_cli = mock_cli_class.return_value
             mock_cli.execute = AsyncMock(return_value=mock_cli_response)
 
-            await model.request(messages, settings, params)  # type: ignore[arg-type]
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, settings, params)  # type: ignore[arg-type]
 
+            assert "working_directory" in caplog.text
+            assert "empty string" in caplog.text
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs["working_directory"] == ""

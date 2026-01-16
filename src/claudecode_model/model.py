@@ -191,14 +191,17 @@ class ClaudeCodeModel(Model):
 
             wd_value = model_settings.get("working_directory")
             if wd_value is not None:
-                if isinstance(wd_value, str):
-                    working_directory = wd_value
-                else:
-                    logger.warning(
-                        "model_settings 'working_directory' has invalid type %s, "
-                        "expected str. Using default working_directory.",
-                        type(wd_value).__name__,
+                if not isinstance(wd_value, str):
+                    raise TypeError(
+                        f"model_settings 'working_directory' must be str, "
+                        f"got {type(wd_value).__name__}"
                     )
+                if wd_value == "":
+                    logger.warning(
+                        "model_settings 'working_directory' is an empty string. "
+                        "This may not be a valid path."
+                    )
+                working_directory = wd_value
 
         cli = ClaudeCodeCLI(
             model=self._model_name,
