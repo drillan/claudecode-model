@@ -83,6 +83,27 @@ class TestClaudeCodeCLIInit:
         assert cli.max_budget_usd == 1.5
         assert cli.append_system_prompt == "Be concise."
 
+    def test_rejects_negative_max_budget_usd(self) -> None:
+        """ClaudeCodeCLI should reject negative max_budget_usd."""
+        with pytest.raises(ValueError, match="max_budget_usd must be non-negative"):
+            ClaudeCodeCLI(max_budget_usd=-1.0)
+
+    def test_accepts_zero_max_budget_usd(self) -> None:
+        """ClaudeCodeCLI should accept zero max_budget_usd."""
+        cli = ClaudeCodeCLI(max_budget_usd=0.0)
+        assert cli.max_budget_usd == 0.0
+
+    def test_accepts_integer_max_budget_usd(self) -> None:
+        """ClaudeCodeCLI should accept integer max_budget_usd and convert to float."""
+        cli = ClaudeCodeCLI(max_budget_usd=5)  # type: ignore[arg-type]
+        assert cli.max_budget_usd == 5.0
+        assert isinstance(cli.max_budget_usd, float)
+
+    def test_accepts_empty_string_append_system_prompt(self) -> None:
+        """ClaudeCodeCLI should accept empty string append_system_prompt."""
+        cli = ClaudeCodeCLI(append_system_prompt="")
+        assert cli.append_system_prompt == ""
+
 
 class TestClaudeCodeCLIFindCLI:
     """Tests for ClaudeCodeCLI._find_cli method."""
