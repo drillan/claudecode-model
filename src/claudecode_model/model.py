@@ -20,6 +20,7 @@ from claudecode_model.cli import (
     DEFAULT_TIMEOUT_SECONDS,
     ClaudeCodeCLI,
 )
+from claudecode_model.types import CLIResponse, RequestWithMetadataResult
 
 if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestParameters
@@ -105,21 +106,21 @@ class ClaudeCodeModel(Model):
 
         return "\n".join(parts)
 
-    async def request(
+    async def _execute_request(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
-        """Make a request to Claude Code CLI.
+    ) -> CLIResponse:
+        """Execute CLI request and return raw response.
+
+        Internal method that handles the actual CLI execution logic.
 
         Args:
             messages: The conversation messages.
-            model_settings: Optional model settings (temperature, etc.).
-            model_request_parameters: Request parameters for tools and output.
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
 
         Returns:
-            ModelResponse containing the CLI response.
+            CLIResponse containing the raw CLI output with all metadata.
 
         Raises:
             ValueError: If no user prompt is found in messages.
@@ -200,8 +201,77 @@ class ClaudeCodeModel(Model):
             max_turns=max_turns,
         )
 
-        cli_response = await cli.execute(user_prompt)
+        return await cli.execute(user_prompt)
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        """Make a request to Claude Code CLI.
+
+        Args:
+            messages: The conversation messages.
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
+            model_request_parameters: Request parameters for tools and output.
+
+        Returns:
+            ModelResponse containing the CLI response.
+
+        Raises:
+            ValueError: If no user prompt is found in messages.
+            CLINotFoundError: If the claude CLI is not found.
+            CLIExecutionError: If CLI execution fails.
+            CLIResponseParseError: If CLI output cannot be parsed.
+        """
+        cli_response = await self._execute_request(messages, model_settings)
         return cli_response.to_model_response(model_name=self._model_name)
+
+    async def request_with_metadata(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> RequestWithMetadataResult:
+        """Make a request to Claude Code CLI and return both response and metadata.
+
+        This method is useful when you need access to CLI metadata such as
+        total_cost_usd, duration_api_ms, num_turns, etc., which are lost
+        during the to_model_response() conversion.
+
+        Args:
+            messages: The conversation messages.
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt).
+            model_request_parameters: Request parameters for tools and output.
+
+        Returns:
+            RequestWithMetadataResult containing:
+                - response: ModelResponse for use with pydantic-ai Agent.
+                - cli_response: Raw CLIResponse with full metadata.
+
+        Raises:
+            ValueError: If no user prompt is found in messages.
+            CLINotFoundError: If the claude CLI is not found.
+            CLIExecutionError: If CLI execution fails.
+            CLIResponseParseError: If CLI output cannot be parsed.
+
+        Example:
+            ```python
+            model = ClaudeCodeModel()
+            result = await model.request_with_metadata(messages, settings, params)
+            metadata = {
+                "total_cost_usd": result.cli_response.total_cost_usd,
+                "num_turns": result.cli_response.num_turns,
+                "duration_api_ms": result.cli_response.duration_api_ms,
+            }
+            ```
+        """
+        cli_response = await self._execute_request(messages, model_settings)
+        return RequestWithMetadataResult(
+            response=cli_response.to_model_response(model_name=self._model_name),
+            cli_response=cli_response,
+        )
 
     def __repr__(self) -> str:
         return f"ClaudeCodeModel(model_name={self._model_name!r})"
