@@ -1,10 +1,21 @@
-"""File analysis example using Claude Code's built-in tools."""
+"""File analysis example using Claude Code's built-in tools.
+
+Prerequisites:
+    - Claude Code CLI installed and available in PATH
+    - Valid authentication configured for Claude Code CLI
+"""
 
 import asyncio
+import sys
 
 from pydantic_ai import Agent
 
 from claudecode_model import ClaudeCodeModel
+from claudecode_model.exceptions import (
+    CLIExecutionError,
+    CLINotFoundError,
+    CLIResponseParseError,
+)
 
 
 async def main() -> None:
@@ -34,4 +45,14 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except CLINotFoundError as e:
+        print(f"CLI not found: {e}", file=sys.stderr)
+        sys.exit(1)
+    except CLIExecutionError as e:
+        print(f"CLI execution failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except CLIResponseParseError as e:
+        print(f"Failed to parse CLI response: {e}", file=sys.stderr)
+        sys.exit(1)

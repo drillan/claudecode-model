@@ -1,12 +1,27 @@
-"""Structured output example - manual JSON parsing approach."""
+"""Structured output example - manual JSON parsing approach.
+
+Note: ClaudeCodeModel does not support pydantic-ai's native output_type
+parameter for structured output. This example demonstrates how to achieve
+structured output by prompting for JSON and parsing manually.
+
+Prerequisites:
+    - Claude Code CLI installed and available in PATH
+    - Valid authentication configured for Claude Code CLI
+"""
 
 import asyncio
 import json
+import sys
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent
 
 from claudecode_model import ClaudeCodeModel
+from claudecode_model.exceptions import (
+    CLIExecutionError,
+    CLINotFoundError,
+    CLIResponseParseError,
+)
 
 
 class CodeReview(BaseModel):
@@ -15,7 +30,7 @@ class CodeReview(BaseModel):
     file_name: str
     issues: list[str]
     suggestions: list[str]
-    score: int  # 1-10
+    score: int = Field(ge=1, le=10)
 
 
 async def main() -> None:
@@ -26,7 +41,7 @@ async def main() -> None:
         allowed_tools=["Read", "Glob"],
     )
 
-    # output_type=strでテキストとして受け取り、JSONをパースする
+    # Agent[None, str]で文字列として受け取り、手動でJSONをパースする
     agent: Agent[None, str] = Agent(
         model,
         system_prompt=(
@@ -85,11 +100,24 @@ def calc(x,y):
         print("Suggestions:")
         for suggestion in review.suggestions:
             print(f"  - {suggestion}")
-    except (json.JSONDecodeError, Exception) as e:
-        print(f"Failed to parse JSON: {e}")
-        print("Raw output was:")
-        print(raw_output)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse JSON: {e}", file=sys.stderr)
+        print(f"Raw output was: {raw_output}", file=sys.stderr)
+        sys.exit(1)
+    except ValidationError as e:
+        print(f"Validation failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except CLINotFoundError as e:
+        print(f"CLI not found: {e}", file=sys.stderr)
+        sys.exit(1)
+    except CLIExecutionError as e:
+        print(f"CLI execution failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except CLIResponseParseError as e:
+        print(f"Failed to parse CLI response: {e}", file=sys.stderr)
+        sys.exit(1)
