@@ -137,6 +137,15 @@ class TestPermissionDenial:
         assert len(denial.tool_input["files"]) == 2  # type: ignore[arg-type]
         assert denial.tool_input["changes"][0]["line"] == 1  # type: ignore[index,call-overload]
 
+    def test_rejects_extra_fields(self) -> None:
+        """PermissionDenial should reject extra fields due to model_config."""
+        with pytest.raises(ValidationError):
+            PermissionDenial(
+                tool_name="Write",
+                tool_input={"file_path": "/test.txt"},
+                extra_field="not allowed",  # type: ignore[call-arg]
+            )
+
 
 class TestModelUsageData:
     """Tests for ModelUsageData model."""
@@ -546,8 +555,7 @@ class TestCLIResponse:
         assert response.permission_denials[1].tool_name == "Bash"
         assert response.permission_denials[1].tool_input is not None
         assert (
-            "sudo apt install"
-            in response.permission_denials[1].tool_input["command"]  # type: ignore[operator]
+            "sudo apt install" in response.permission_denials[1].tool_input["command"]  # type: ignore[operator]
         )
 
     def test_multiple_models_in_model_usage(self) -> None:

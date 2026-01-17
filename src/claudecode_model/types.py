@@ -58,6 +58,8 @@ class PermissionDenial(BaseModel):
     tool_name: str
     tool_input: dict[str, JsonValue] | None = None
 
+    model_config = {"extra": "forbid"}
+
 
 class ModelUsageData(BaseModel):
     """Per-model usage data from CLI response.
