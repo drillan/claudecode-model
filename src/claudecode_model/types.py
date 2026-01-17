@@ -9,6 +9,11 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
+# JSON互換の再帰型（Any型を避ける）
+type JsonValue = (
+    int | float | str | bool | None | list[JsonValue] | dict[str, JsonValue]
+)
+
 
 class ClaudeCodeModelSettings(ModelSettings, total=False):
     """Extended ModelSettings for Claude Code CLI.
@@ -42,6 +47,16 @@ class CacheCreation(BaseModel):
 
     ephemeral_1h_input_tokens: int = Field(default=0, ge=0)
     ephemeral_5m_input_tokens: int = Field(default=0, ge=0)
+
+
+class PermissionDenial(BaseModel):
+    """Permission denial entry from CLI response.
+
+    Represents a denied tool usage permission with the tool name and input.
+    """
+
+    tool_name: str
+    tool_input: dict[str, JsonValue] | None = None
 
 
 class ModelUsageData(BaseModel):
@@ -86,6 +101,13 @@ class CacheCreationData(TypedDict, total=False):
     ephemeral_5m_input_tokens: int
 
 
+class PermissionDenialData(TypedDict, total=False):
+    """TypedDict for permission denial data from JSON."""
+
+    tool_name: str
+    tool_input: dict[str, JsonValue]
+
+
 class ModelUsageDataDict(TypedDict, total=False):
     """TypedDict for model usage data from JSON."""
 
@@ -125,7 +147,7 @@ class CLIResponseData(TypedDict, total=False):
     total_cost_usd: float | None
     usage: CLIUsageData
     model_usage: dict[str, ModelUsageDataDict]
-    permission_denials: list[str]
+    permission_denials: list[PermissionDenialData]
     uuid: str
 
 
@@ -157,7 +179,7 @@ class CLIResponse(BaseModel):
     model_usage: dict[str, ModelUsageData] | None = Field(
         default=None, alias="modelUsage"
     )
-    permission_denials: list[str] | None = None
+    permission_denials: list[PermissionDenial] | None = None
     uuid: str | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
