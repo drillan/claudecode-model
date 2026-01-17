@@ -122,6 +122,7 @@ class ClaudeCodeCLI:
         if self.max_turns is not None:
             cmd.extend(["--max-turns", str(self.max_turns)])
 
+        cmd.append("--")  # End of options marker
         cmd.append(prompt)
         return cmd
 
