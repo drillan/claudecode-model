@@ -52,11 +52,12 @@ class CacheCreation(BaseModel):
 class PermissionDenial(BaseModel):
     """Permission denial entry from CLI response.
 
-    Represents a denied tool usage permission with the tool name and input.
+    Represents a denied tool usage permission with the tool name, input, and ID.
     """
 
     tool_name: str
     tool_input: dict[str, JsonValue] | None = None
+    tool_use_id: str | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -108,6 +109,7 @@ class PermissionDenialData(TypedDict, total=False):
 
     tool_name: str
     tool_input: dict[str, JsonValue]
+    tool_use_id: str
 
 
 class ModelUsageDataDict(TypedDict, total=False):
