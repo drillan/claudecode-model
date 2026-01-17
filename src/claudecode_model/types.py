@@ -55,7 +55,7 @@ class PermissionDenial(BaseModel):
     Represents a denied tool usage permission with the tool name, input, and ID.
     """
 
-    tool_name: str
+    tool_name: str = Field(min_length=1)
     tool_input: dict[str, JsonValue] | None = None
     tool_use_id: str | None = None
 
@@ -109,7 +109,7 @@ class PermissionDenialData(TypedDict, total=False):
 
     tool_name: str
     tool_input: dict[str, JsonValue]
-    tool_use_id: str
+    tool_use_id: str | None
 
 
 class ModelUsageDataDict(TypedDict, total=False):

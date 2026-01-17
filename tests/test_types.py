@@ -167,6 +167,11 @@ class TestPermissionDenial:
         assert denial.tool_name == "Write"
         assert denial.tool_use_id is None
 
+    def test_rejects_empty_tool_name(self) -> None:
+        """PermissionDenial should reject empty tool_name string."""
+        with pytest.raises(ValidationError):
+            PermissionDenial(tool_name="")
+
 
 class TestModelUsageData:
     """Tests for ModelUsageData model."""
@@ -885,6 +890,47 @@ class TestParseCLIResponse:
         assert response.permission_denials[0].tool_use_id == "toolu_01ABC123XYZ"
         assert response.permission_denials[1].tool_name == "Write"
         assert response.permission_denials[1].tool_use_id == "toolu_01DEF456UVW"
+
+    def test_parses_permission_denials_mixed_tool_use_id(self) -> None:
+        """parse_cli_response should parse permission_denials with mixed tool_use_id presence."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1000,
+            "duration_api_ms": 800,
+            "num_turns": 1,
+            "result": "test",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "permission_denials": [
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "rm -rf /"},
+                    "tool_use_id": "toolu_01ABC123XYZ",
+                },
+                {
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": "/etc/passwd"},
+                    # tool_use_id is omitted (backward compatibility)
+                },
+            ],
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.permission_denials is not None
+        assert len(response.permission_denials) == 2
+        # First denial has tool_use_id
+        assert response.permission_denials[0].tool_name == "Bash"
+        assert response.permission_denials[0].tool_use_id == "toolu_01ABC123XYZ"
+        # Second denial does not have tool_use_id
+        assert response.permission_denials[1].tool_name == "Write"
+        assert response.permission_denials[1].tool_use_id is None
 
 
 class TestClaudeCodeModelSettings:
