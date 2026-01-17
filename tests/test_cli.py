@@ -242,6 +242,37 @@ class TestClaudeCodeCLIBuildCommand:
             assert "--max-turns" in cmd
             assert "5" in cmd
 
+    def test_builds_command_with_dash_starting_prompt(self) -> None:
+        """_build_command should handle prompts starting with dash."""
+        cli = ClaudeCodeCLI()
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("-hello")
+            # Verify -- marker is present before the prompt
+            assert "--" in cmd
+            double_dash_index = cmd.index("--")
+            assert cmd[double_dash_index + 1] == "-hello"
+
+    def test_builds_command_with_triple_dash_starting_prompt(self) -> None:
+        """_build_command should handle prompts starting with triple dash (---)."""
+        cli = ClaudeCodeCLI()
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("---test")
+            # Verify -- marker is present before the prompt
+            assert "--" in cmd
+            double_dash_index = cmd.index("--")
+            assert cmd[double_dash_index + 1] == "---test"
+
+    def test_builds_command_with_double_dash_starting_prompt(self) -> None:
+        """_build_command should handle prompts starting with double dash (--)."""
+        cli = ClaudeCodeCLI()
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("--test")
+            # Verify end-of-options marker is present before the prompt
+            assert "--" in cmd
+            # The first "--" should be the marker, not part of the prompt
+            double_dash_index = cmd.index("--")
+            assert cmd[double_dash_index + 1] == "--test"
+
 
 class TestClaudeCodeCLIExecute:
     """Tests for ClaudeCodeCLI.execute method."""
