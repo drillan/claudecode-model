@@ -10,6 +10,7 @@ from claudecode_model.types import (
     CLIUsage,
     ClaudeCodeModelSettings,
     ModelUsageData,
+    PermissionDenial,
     ServerToolUse,
     parse_cli_response,
 )
@@ -67,6 +68,83 @@ class TestCacheCreation:
         """CacheCreation should reject negative ephemeral_5m_input_tokens."""
         with pytest.raises(ValidationError):
             CacheCreation(ephemeral_1h_input_tokens=0, ephemeral_5m_input_tokens=-1)
+
+
+class TestPermissionDenial:
+    """Tests for PermissionDenial model."""
+
+    def test_requires_tool_name(self) -> None:
+        """PermissionDenial should require tool_name field."""
+        with pytest.raises(ValidationError):
+            PermissionDenial()  # type: ignore[call-arg]
+
+    def test_valid_with_tool_name_only(self) -> None:
+        """PermissionDenial should accept only tool_name."""
+        denial = PermissionDenial(tool_name="Write")
+        assert denial.tool_name == "Write"
+        assert denial.tool_input is None
+
+    def test_valid_with_tool_name_and_empty_tool_input(self) -> None:
+        """PermissionDenial should accept tool_name with empty tool_input."""
+        denial = PermissionDenial(tool_name="Read", tool_input={})
+        assert denial.tool_name == "Read"
+        assert denial.tool_input == {}
+
+    def test_valid_with_tool_name_and_tool_input(self) -> None:
+        """PermissionDenial should accept tool_name with tool_input dict."""
+        denial = PermissionDenial(
+            tool_name="Write",
+            tool_input={
+                "file_path": "/etc/passwd",
+                "content": "malicious content",
+            },
+        )
+        assert denial.tool_name == "Write"
+        assert denial.tool_input is not None
+        assert denial.tool_input["file_path"] == "/etc/passwd"
+        assert denial.tool_input["content"] == "malicious content"
+
+    def test_valid_with_nested_tool_input(self) -> None:
+        """PermissionDenial should accept nested dict in tool_input."""
+        denial = PermissionDenial(
+            tool_name="Bash",
+            tool_input={
+                "command": "rm -rf /",
+                "options": {
+                    "force": True,
+                    "recursive": True,
+                },
+            },
+        )
+        assert denial.tool_name == "Bash"
+        assert denial.tool_input is not None
+        assert denial.tool_input["options"]["force"] is True  # type: ignore[index,call-overload]
+
+    def test_valid_with_list_in_tool_input(self) -> None:
+        """PermissionDenial should accept list in tool_input."""
+        denial = PermissionDenial(
+            tool_name="MultiEdit",
+            tool_input={
+                "files": ["/file1.txt", "/file2.txt"],
+                "changes": [
+                    {"line": 1, "content": "new content"},
+                    {"line": 5, "content": "another change"},
+                ],
+            },
+        )
+        assert denial.tool_name == "MultiEdit"
+        assert denial.tool_input is not None
+        assert len(denial.tool_input["files"]) == 2  # type: ignore[arg-type]
+        assert denial.tool_input["changes"][0]["line"] == 1  # type: ignore[index,call-overload]
+
+    def test_rejects_extra_fields(self) -> None:
+        """PermissionDenial should reject extra fields due to model_config."""
+        with pytest.raises(ValidationError):
+            PermissionDenial(
+                tool_name="Write",
+                tool_input={"file_path": "/test.txt"},
+                extra_field="not allowed",  # type: ignore[call-arg]
+            )
 
 
 class TestModelUsageData:
@@ -443,7 +521,7 @@ class TestCLIResponse:
         assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
 
     def test_permission_denials_with_values(self) -> None:
-        """CLIResponse should accept non-empty permission_denials list."""
+        """CLIResponse should accept non-empty permission_denials list with object format."""
         response = CLIResponse(
             type="result",
             subtype="success",
@@ -459,14 +537,26 @@ class TestCLIResponse:
                 cache_read_input_tokens=0,
             ),
             permission_denials=[
-                "User denied permission to run: rm -rf /",
-                "User denied permission to run: sudo apt install",
+                PermissionDenial(
+                    tool_name="Bash",
+                    tool_input={"command": "rm -rf /"},
+                ),
+                PermissionDenial(
+                    tool_name="Bash",
+                    tool_input={"command": "sudo apt install malware"},
+                ),
             ],
         )
         assert response.permission_denials is not None
         assert len(response.permission_denials) == 2
-        assert "rm -rf /" in response.permission_denials[0]
-        assert "sudo apt install" in response.permission_denials[1]
+        assert response.permission_denials[0].tool_name == "Bash"
+        assert response.permission_denials[0].tool_input is not None
+        assert response.permission_denials[0].tool_input["command"] == "rm -rf /"
+        assert response.permission_denials[1].tool_name == "Bash"
+        assert response.permission_denials[1].tool_input is not None
+        assert (
+            "sudo apt install" in response.permission_denials[1].tool_input["command"]  # type: ignore[operator]
+        )
 
     def test_multiple_models_in_model_usage(self) -> None:
         """CLIResponse should accept model_usage with multiple models."""
@@ -702,6 +792,39 @@ class TestParseCLIResponse:
         assert response.model_usage["claude-opus-4-5-20251101"].input_tokens == 2
         assert response.permission_denials == []
         assert response.uuid == "0364bc35-e562-4b82-8b8b-f6c80677d13a"
+
+    def test_parses_permission_denials_with_object_format(self) -> None:
+        """parse_cli_response should parse permission_denials with object format."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1000,
+            "duration_api_ms": 800,
+            "num_turns": 1,
+            "result": "test",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "permission_denials": [
+                {"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"}},
+                {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
+            ],
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.permission_denials is not None
+        assert len(response.permission_denials) == 2
+        assert response.permission_denials[0].tool_name == "Write"
+        assert response.permission_denials[0].tool_input is not None
+        assert response.permission_denials[0].tool_input["file_path"] == "/etc/passwd"
+        assert response.permission_denials[1].tool_name == "Bash"
+        assert response.permission_denials[1].tool_input is not None
+        assert response.permission_denials[1].tool_input["command"] == "rm -rf /"
 
 
 class TestClaudeCodeModelSettings:
