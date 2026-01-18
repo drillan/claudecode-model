@@ -15,19 +15,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
+from typing import Literal, TypedDict, TypeVar
 
 from claude_agent_sdk import SdkMcpTool
 from pydantic_ai.tools import Tool
 
-from claudecode_model.deps_support import (
-    DepsContext,
-    _is_instance_serializable,
-)
-from claudecode_model.exceptions import UnsupportedDepsTypeError
-
-if TYPE_CHECKING:
-    from typing import Any
+from claudecode_model.deps_support import DepsContext, create_deps_context
 
 T = TypeVar("T")
 
@@ -106,7 +99,7 @@ def _create_async_handler(
     func: Callable[..., object],
     takes_ctx: bool,
     deps_context: DepsContext[object] | None = None,
-) -> Callable[[JsonSchema], Awaitable[dict[str, Any]]]:
+) -> Callable[[JsonSchema], Awaitable[dict[str, object]]]:
     """Wrap a sync/async function as an async SDK handler.
 
     Args:
@@ -126,7 +119,7 @@ def _create_async_handler(
             "Please use tool_plain decorator instead."
         )
 
-    async def handler(args: JsonSchema) -> dict[str, Any]:
+    async def handler(args: JsonSchema) -> dict[str, object]:
         try:
             if takes_ctx and deps_context is not None:
                 # Inject the deps context as the first argument
@@ -244,17 +237,14 @@ def convert_tool_with_deps(tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
     if not isinstance(tool, Tool):
         raise TypeError(f"expected Tool, got {type(tool).__name__}")
 
-    # Validate that deps is serializable
-    if not _is_instance_serializable(deps):
-        raise UnsupportedDepsTypeError(type(deps).__name__)
-
     tool_def = tool.tool_def
     name = tool_def.name
     description = tool_def.description or ""
     input_schema = tool_def.parameters_json_schema
 
-    # Create deps context (cast to object for type compatibility)
-    deps_context: DepsContext[object] = DepsContext(deps)
+    # Create deps context with validation (raises UnsupportedDepsTypeError if not serializable)
+    # Cast to DepsContext[object] for type compatibility with _create_async_handler
+    deps_context: DepsContext[object] = create_deps_context(deps)  # type: ignore[assignment]
 
     handler = _create_async_handler(
         tool.function, takes_ctx=tool.takes_ctx, deps_context=deps_context

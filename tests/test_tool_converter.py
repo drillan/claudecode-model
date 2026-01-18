@@ -1,11 +1,13 @@
 """Tests for tool_converter module - pydantic-ai Tool to SDK conversion."""
 
+# mypy: disable-error-code="index,operator,arg-type"
+
 from __future__ import annotations
 
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import httpx
 import pytest
@@ -40,16 +42,16 @@ class _MyDeps:
     value: str
 
 
-def _get_input_schema(tool: SdkMcpTool[JsonSchema]) -> dict[str, Any]:
+def _get_input_schema(tool: SdkMcpTool[JsonSchema]) -> dict[str, object]:
     """Helper to get input_schema as dict for testing."""
-    return cast(dict[str, Any], tool.input_schema)
+    return cast(dict[str, object], tool.input_schema)
 
 
 async def _call_handler(
     tool: SdkMcpTool[JsonSchema], args: dict[str, object]
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Helper to call handler with correct types for testing."""
-    return cast(dict[str, Any], await tool.handler(args))  # type: ignore[arg-type]
+    return cast(dict[str, object], await tool.handler(args))  # type: ignore[arg-type]
 
 
 class TestConvertToolToSdkMcpTool:
@@ -344,7 +346,7 @@ class TestHandlerWrapping:
 
         result = convert_tool(tool)
 
-        output: dict[str, Any] = asyncio.run(_call_handler(result, {"x": "test"}))
+        output: dict[str, object] = asyncio.run(_call_handler(result, {"x": "test"}))
 
         # Should be MCP format
         assert "content" in output
@@ -452,7 +454,7 @@ class TestErrorHandling:
 
         result = convert_tool(tool)
 
-        output: dict[str, Any] = asyncio.run(_call_handler(result, {"x": "test"}))
+        output: dict[str, object] = asyncio.run(_call_handler(result, {"x": "test"}))
 
         # Should have error indication in content
         assert "content" in output
@@ -577,7 +579,7 @@ class TestSerializableDepsSupport:
         assert result.name == "fetch_data"
 
         # Execute the handler
-        output: dict[str, Any] = asyncio.run(
+        output: dict[str, object] = asyncio.run(
             _call_handler(result, {"query": "test query"})
         )
 
@@ -606,7 +608,7 @@ class TestSerializableDepsSupport:
         config = _ApiConfig(base_url="https://api.example.com", api_key="secret123")
         result = convert_tool_with_deps(tool, config)
 
-        output: dict[str, Any] = asyncio.run(
+        output: dict[str, object] = asyncio.run(
             _call_handler(result, {"endpoint": "/users"})
         )
 
@@ -659,3 +661,42 @@ class TestSerializableDepsSupport:
         # but other args should be
         assert "name" in schema["properties"]
         assert "count" in schema["properties"]
+
+    def test_raises_on_invalid_tool_type_with_deps(self) -> None:
+        """convert_tool_with_deps should raise TypeError for non-Tool input."""
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        with pytest.raises(TypeError, match="expected.*Tool"):
+            convert_tool_with_deps("not a tool", {"key": "value"})  # type: ignore[arg-type]
+
+    def test_async_tool_with_deps(self) -> None:
+        """Async tool with deps should work correctly."""
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        agent: Agent[_DictDeps] = Agent("test")
+        received_deps: dict[str, object] = {}
+
+        @agent.tool
+        async def async_fetch_data(ctx: RunContext[_DictDeps], query: str) -> str:
+            """Async fetch data using deps."""
+            received_deps["api_url"] = ctx.deps.api_url
+            received_deps["timeout"] = ctx.deps.timeout
+            return f"Async Fetched: {query}"
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        deps = _DictDeps(api_url="https://async.example.com", timeout=60)
+        result = convert_tool_with_deps(tool, deps)
+
+        assert result.name == "async_fetch_data"
+
+        # Execute the async handler
+        output: dict[str, object] = asyncio.run(
+            _call_handler(result, {"query": "async query"})
+        )
+
+        assert "content" in output
+        assert "Async Fetched: async query" in output["content"][0]["text"]
+        assert received_deps["api_url"] == "https://async.example.com"
+        assert received_deps["timeout"] == 60
