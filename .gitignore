@@ -217,3 +217,7 @@ __marimo__/
 
 # Claude code local settings
 .claude/settings.local.json
+
+# working directories
+/work/
+/ai_working/

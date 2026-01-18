@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import NamedTuple, TypedDict
 
 from pydantic import BaseModel, Field
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
+
+from claudecode_model.exceptions import CLIResponseParseError
 
 # JSON互換の再帰型（Any型を避ける）
 type JsonValue = (
@@ -153,6 +156,7 @@ class CLIResponseData(TypedDict, total=False):
     model_usage: dict[str, ModelUsageDataDict]
     permission_denials: list[PermissionDenialData]
     uuid: str
+    structured_output: dict[str, JsonValue]
 
 
 class CLIUsage(BaseModel):
@@ -185,13 +189,33 @@ class CLIResponse(BaseModel):
     )
     permission_denials: list[PermissionDenial] | None = None
     uuid: str | None = None
+    structured_output: dict[str, JsonValue] | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
     def to_model_response(self, model_name: str | None = None) -> ModelResponse:
-        """Convert CLI response to pydantic-ai ModelResponse."""
+        """Convert CLI response to pydantic-ai ModelResponse.
+
+        If structured_output is present, returns its JSON serialization.
+        Otherwise returns the text result.
+
+        Raises:
+            CLIResponseParseError: If structured_output cannot be serialized to JSON.
+        """
+        # Use structured_output if available, otherwise use result
+        if self.structured_output is not None:
+            try:
+                content = json.dumps(self.structured_output, ensure_ascii=False)
+            except (TypeError, ValueError) as e:
+                raise CLIResponseParseError(
+                    f"Failed to serialize structured_output to JSON: {e}",
+                    raw_output=str(self.structured_output),
+                ) from e
+        else:
+            content = self.result
+
         return ModelResponse(
-            parts=[TextPart(content=self.result)],
+            parts=[TextPart(content=content)],
             usage=RequestUsage(
                 input_tokens=self.usage.input_tokens,
                 output_tokens=self.usage.output_tokens,

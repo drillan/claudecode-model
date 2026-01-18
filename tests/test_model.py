@@ -979,3 +979,262 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
             assert "empty string" in caplog.text
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs["working_directory"] == ""
+
+
+class TestClaudeCodeModelStructuredOutput:
+    """Tests for ClaudeCodeModel structured output (output_type) support."""
+
+    @pytest.fixture
+    def mock_cli_response(self) -> CLIResponse:
+        """Return a mock CLI response."""
+        return CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Response from Claude",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+    @pytest.fixture
+    def mock_cli_response_with_structured_output(self) -> CLIResponse:
+        """Return a mock CLI response with structured_output."""
+        return CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Generated output",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"name": "test", "score": 95},
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_without_output_mode_does_not_pass_json_schema(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should not pass json_schema when output_mode is not native."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs.get("json_schema") is None
+
+    @pytest.mark.asyncio
+    async def test_request_with_native_output_mode_passes_json_schema(
+        self, mock_cli_response_with_structured_output: CLIResponse
+    ) -> None:
+        """request should pass json_schema when output_mode is native."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(
+                return_value=mock_cli_response_with_structured_output
+            )
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs.get("json_schema") == json_schema
+
+    @pytest.mark.asyncio
+    async def test_request_with_native_output_mode_without_output_object(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should not pass json_schema when output_mode is native but no output_object."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=None,
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs.get("json_schema") is None
+
+    @pytest.mark.asyncio
+    async def test_request_with_tool_output_mode_does_not_pass_json_schema(
+        self, mock_cli_response: CLIResponse
+    ) -> None:
+        """request should not pass json_schema when output_mode is tool."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="tool",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+
+            await model.request(messages, None, params)
+
+            call_kwargs = mock_cli_class.call_args.kwargs
+            # Should NOT pass json_schema for tool mode
+            assert call_kwargs.get("json_schema") is None
+
+    @pytest.mark.asyncio
+    async def test_request_with_structured_output_returns_json_in_response(
+        self, mock_cli_response_with_structured_output: CLIResponse
+    ) -> None:
+        """request should return JSON string in response when structured_output present."""
+        from pydantic_ai.models import OutputObjectDefinition
+        import json
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(
+                return_value=mock_cli_response_with_structured_output
+            )
+
+            response = await model.request(messages, None, params)
+
+            # The response content should be JSON string
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test", "score": 95}
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_preserves_structured_output(
+        self, mock_cli_response_with_structured_output: CLIResponse
+    ) -> None:
+        """request_with_metadata should preserve structured_output in cli_response."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(
+                return_value=mock_cli_response_with_structured_output
+            )
+
+            result = await model.request_with_metadata(messages, None, params)
+
+            assert result.cli_response.structured_output is not None
+            assert result.cli_response.structured_output["name"] == "test"
+            assert result.cli_response.structured_output["score"] == 95

@@ -20,7 +20,7 @@ from claudecode_model.cli import (
     DEFAULT_TIMEOUT_SECONDS,
     ClaudeCodeCLI,
 )
-from claudecode_model.types import CLIResponse, RequestWithMetadataResult
+from claudecode_model.types import CLIResponse, JsonValue, RequestWithMetadataResult
 
 if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestParameters
@@ -106,10 +106,28 @@ class ClaudeCodeModel(Model):
 
         return "\n".join(parts)
 
+    def _extract_json_schema(
+        self, model_request_parameters: ModelRequestParameters
+    ) -> dict[str, JsonValue] | None:
+        """Extract JSON schema from model request parameters.
+
+        Args:
+            model_request_parameters: Request parameters for tools and output.
+
+        Returns:
+            JSON schema dict if output_mode is 'native' and output_object is set,
+            None otherwise.
+        """
+        if model_request_parameters.output_mode == "native":
+            if model_request_parameters.output_object is not None:
+                return model_request_parameters.output_object.json_schema
+        return None
+
     async def _execute_request(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
+        json_schema: dict[str, JsonValue] | None = None,
     ) -> CLIResponse:
         """Execute CLI request and return raw response.
 
@@ -118,6 +136,7 @@ class ClaudeCodeModel(Model):
         Args:
             messages: The conversation messages.
             model_settings: Optional model settings (timeout, max_budget_usd, max_turns, append_system_prompt, working_directory).
+            json_schema: Optional JSON schema for structured output.
 
         Returns:
             CLIResponse containing the raw CLI output with all metadata.
@@ -214,6 +233,7 @@ class ClaudeCodeModel(Model):
             max_budget_usd=max_budget_usd,
             append_system_prompt=append_system_prompt,
             max_turns=max_turns,
+            json_schema=json_schema,
         )
 
         return await cli.execute(user_prompt)
@@ -240,7 +260,10 @@ class ClaudeCodeModel(Model):
             CLIExecutionError: If CLI execution fails.
             CLIResponseParseError: If CLI output cannot be parsed.
         """
-        cli_response = await self._execute_request(messages, model_settings)
+        json_schema = self._extract_json_schema(model_request_parameters)
+        cli_response = await self._execute_request(
+            messages, model_settings, json_schema=json_schema
+        )
         return cli_response.to_model_response(model_name=self._model_name)
 
     async def request_with_metadata(
@@ -282,7 +305,10 @@ class ClaudeCodeModel(Model):
             }
             ```
         """
-        cli_response = await self._execute_request(messages, model_settings)
+        json_schema = self._extract_json_schema(model_request_parameters)
+        cli_response = await self._execute_request(
+            messages, model_settings, json_schema=json_schema
+        )
         return RequestWithMetadataResult(
             response=cli_response.to_model_response(model_name=self._model_name),
             cli_response=cli_response,

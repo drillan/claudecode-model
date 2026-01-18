@@ -968,3 +968,179 @@ class TestClaudeCodeModelSettings:
         """ClaudeCodeModelSettings should accept max_turns."""
         settings: ClaudeCodeModelSettings = {"max_turns": 10}
         assert settings["max_turns"] == 10
+
+
+class TestCLIResponseStructuredOutput:
+    """Tests for CLIResponse structured_output field."""
+
+    def test_structured_output_defaults_to_none(self) -> None:
+        """CLIResponse structured_output should default to None."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="test",
+            usage=CLIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+        assert response.structured_output is None
+
+    def test_structured_output_accepts_dict(self) -> None:
+        """CLIResponse should accept structured_output dict."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="test",
+            usage=CLIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"name": "test", "score": 95},
+        )
+        assert response.structured_output == {"name": "test", "score": 95}
+
+    def test_structured_output_accepts_nested_dict(self) -> None:
+        """CLIResponse should accept nested structured_output dict."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="test",
+            usage=CLIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={
+                "user": {"name": "Alice", "age": 30},
+                "items": [1, 2, 3],
+                "active": True,
+                "score": None,
+            },
+        )
+        assert response.structured_output is not None
+        user = response.structured_output["user"]
+        assert isinstance(user, dict)
+        assert user["name"] == "Alice"
+        assert response.structured_output["items"] == [1, 2, 3]
+        assert response.structured_output["active"] is True
+        assert response.structured_output["score"] is None
+
+    def test_to_model_response_with_structured_output(self) -> None:
+        """to_model_response should return JSON string when structured_output present."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="This is the text result",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"name": "test", "score": 95},
+        )
+
+        model_response = response.to_model_response(model_name="test-model")
+
+        # When structured_output is present, content should be JSON string
+        import json
+
+        content = model_response.parts[0].content  # type: ignore[union-attr]
+        parsed = json.loads(content)  # type: ignore[arg-type]
+        assert parsed == {"name": "test", "score": 95}
+
+    def test_to_model_response_without_structured_output_uses_result(self) -> None:
+        """to_model_response should use result when structured_output is None."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Plain text result",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+        model_response = response.to_model_response(model_name="test-model")
+
+        content = model_response.parts[0].content  # type: ignore[union-attr]
+        assert content == "Plain text result"
+
+
+class TestParseCLIResponseStructuredOutput:
+    """Tests for parse_cli_response with structured_output."""
+
+    def test_parses_structured_output_from_json(self) -> None:
+        """parse_cli_response should parse structured_output from JSON data."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1000,
+            "duration_api_ms": 800,
+            "num_turns": 1,
+            "result": "text result",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "structured_output": {"key": "value", "number": 42},
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.structured_output is not None
+        assert response.structured_output["key"] == "value"
+        assert response.structured_output["number"] == 42
+
+    def test_parses_without_structured_output(self) -> None:
+        """parse_cli_response should work without structured_output field."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1000,
+            "duration_api_ms": 800,
+            "num_turns": 1,
+            "result": "text result",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.structured_output is None
