@@ -173,7 +173,7 @@ class TestConvertSdkMessagesToCLIResponse:
         self,
         *,
         result: str | None = "Test result",
-        structured_output: object = None,
+        structured_output: dict[str, JsonValue] | str | None = None,
         subtype: str = "success",
         is_error: bool = False,
         duration_ms: int = 1000,
@@ -181,7 +181,7 @@ class TestConvertSdkMessagesToCLIResponse:
         num_turns: int = 1,
         session_id: str = "session-123",
         total_cost_usd: float | None = 0.05,
-        usage: dict[str, object] | None = None,
+        usage: dict[str, JsonValue] | None = None,
     ) -> ResultMessage:
         """Helper to create ResultMessage with defaults."""
         return ResultMessage(
@@ -267,7 +267,7 @@ class TestConvertSdkMessagesToCLIResponse:
 
     def test_handles_structured_output(self) -> None:
         """structured_output dict should be preserved."""
-        structured = {"key": "value", "nested": {"a": 1}}
+        structured: dict[str, JsonValue] = {"key": "value", "nested": {"a": 1}}
         result_msg = self._create_result_message(
             result=None,
             structured_output=structured,
@@ -308,7 +308,7 @@ class TestConvertSdkMessagesToCLIResponse:
 
     def test_handles_usage_conversion(self) -> None:
         """usage dict should be converted to CLIUsage."""
-        usage_data: dict[str, object] = {
+        usage_data: dict[str, JsonValue] = {
             "input_tokens": 500,
             "output_tokens": 200,
             "cache_read_input_tokens": 100,

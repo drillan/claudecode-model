@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from claude_agent_sdk.types import (
@@ -19,13 +20,16 @@ from claudecode_model.types import (
     ServerToolUse,
 )
 
+logger = logging.getLogger(__name__)
 
-def _safe_int(value: JsonValue, default: int = 0) -> int:
-    """Safely convert JsonValue to int.
+
+def _safe_int(value: JsonValue, default: int = 0, *, field_name: str = "") -> int:
+    """Safely convert JsonValue to int with warning on unexpected types.
 
     Args:
         value: The value to convert.
         default: Default value if conversion fails.
+        field_name: Name of the field being converted (for logging).
 
     Returns:
         Integer value or default.
@@ -41,15 +45,29 @@ def _safe_int(value: JsonValue, default: int = 0) -> int:
         try:
             return int(value)
         except ValueError:
+            logger.warning(
+                "Failed to convert string to int for field '%s': %r, using default %d",
+                field_name,
+                value,
+                default,
+            )
             return default
+    # Unexpected type (list, dict, etc.)
+    logger.warning(
+        "Unexpected type for field '%s': %s (value: %r), using default %d",
+        field_name,
+        type(value).__name__,
+        value,
+        default,
+    )
     return default
 
 
 def extract_text_from_assistant_message(message: AssistantMessage) -> str:
     """Extract text content from AssistantMessage.
 
-    Extracts only text from TextBlock elements, ignoring ThinkingBlock,
-    ToolUseBlock, and ToolResultBlock.
+    Extracts only text from TextBlock elements, ignoring ThinkingBlock
+    and ToolUseBlock.
 
     Args:
         message: The AssistantMessage to extract text from.
@@ -85,10 +103,15 @@ def convert_usage_dict_to_cli_usage(
         )
 
     # Extract basic token counts with defaults using _safe_int
-    input_tokens = _safe_int(usage.get("input_tokens"))
-    output_tokens = _safe_int(usage.get("output_tokens"))
-    cache_creation_input_tokens = _safe_int(usage.get("cache_creation_input_tokens"))
-    cache_read_input_tokens = _safe_int(usage.get("cache_read_input_tokens"))
+    input_tokens = _safe_int(usage.get("input_tokens"), field_name="input_tokens")
+    output_tokens = _safe_int(usage.get("output_tokens"), field_name="output_tokens")
+    cache_creation_input_tokens = _safe_int(
+        usage.get("cache_creation_input_tokens"),
+        field_name="cache_creation_input_tokens",
+    )
+    cache_read_input_tokens = _safe_int(
+        usage.get("cache_read_input_tokens"), field_name="cache_read_input_tokens"
+    )
     service_tier = usage.get("service_tier")
 
     # Convert server_tool_use if present
@@ -97,10 +120,12 @@ def convert_usage_dict_to_cli_usage(
     if isinstance(server_tool_use_data, dict):
         server_tool_use = ServerToolUse(
             web_search_requests=_safe_int(
-                server_tool_use_data.get("web_search_requests")
+                server_tool_use_data.get("web_search_requests"),
+                field_name="server_tool_use.web_search_requests",
             ),
             web_fetch_requests=_safe_int(
-                server_tool_use_data.get("web_fetch_requests")
+                server_tool_use_data.get("web_fetch_requests"),
+                field_name="server_tool_use.web_fetch_requests",
             ),
         )
 
@@ -110,10 +135,12 @@ def convert_usage_dict_to_cli_usage(
     if isinstance(cache_creation_data, dict):
         cache_creation = CacheCreation(
             ephemeral_1h_input_tokens=_safe_int(
-                cache_creation_data.get("ephemeral_1h_input_tokens")
+                cache_creation_data.get("ephemeral_1h_input_tokens"),
+                field_name="cache_creation.ephemeral_1h_input_tokens",
             ),
             ephemeral_5m_input_tokens=_safe_int(
-                cache_creation_data.get("ephemeral_5m_input_tokens")
+                cache_creation_data.get("ephemeral_5m_input_tokens"),
+                field_name="cache_creation.ephemeral_5m_input_tokens",
             ),
         )
 
@@ -134,6 +161,9 @@ def convert_sdk_messages_to_cli_response(
     default_type: str = "result",
 ) -> CLIResponse:
     """Convert Claude Agent SDK messages to CLIResponse format.
+
+    If multiple ResultMessage objects are present in the messages list,
+    the last one is used for extracting response metadata.
 
     Args:
         messages: List of SDK Message objects. Must contain at least one ResultMessage.
