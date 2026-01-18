@@ -94,6 +94,11 @@ def main() -> None:
         now = datetime.now(tz.utc)
         return f"Current time (UTC): {now.strftime('%Y-%m-%d %H:%M:%S')} UTC"
 
+    # Register tools with the model's MCP server
+    # This is required for Claude to be able to call the tools
+    tools = list(agent._function_toolset.tools.values())
+    model.set_agent_toolsets(tools)
+
     # Run the agent with a prompt that will use the tools
     print("Running agent with function tools...")
     print("-" * 50)

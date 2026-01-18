@@ -2352,3 +2352,94 @@ class TestClaudeCodeModelSetAgentToolsets:
 
         assert "Overwriting" in caplog.text
         assert "pydantic_tools" in caplog.text
+
+
+class TestBuildAgentOptionsMcpServers:
+    """Tests for _build_agent_options passing mcp_servers to ClaudeAgentOptions."""
+
+    def test_build_agent_options_passes_mcp_servers(self) -> None:
+        """_build_agent_options should pass mcp_servers to ClaudeAgentOptions."""
+        from unittest.mock import MagicMock
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "test_tool"
+        mock_tool.description = "A test tool"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        # Register toolsets to populate _mcp_servers
+        model.set_agent_toolsets([mock_tool])
+
+        # Build agent options
+        options = model._build_agent_options()
+
+        # Verify mcp_servers is passed to ClaudeAgentOptions
+        assert options.mcp_servers is not None
+        assert "pydantic_tools" in options.mcp_servers
+
+    def test_build_agent_options_empty_mcp_servers_when_no_toolsets(self) -> None:
+        """_build_agent_options should pass empty mcp_servers when no toolsets registered."""
+        model = ClaudeCodeModel()
+
+        # Build agent options without setting toolsets
+        options = model._build_agent_options()
+
+        # mcp_servers should be empty dict
+        assert options.mcp_servers == {}
+
+    @pytest.mark.asyncio
+    async def test_request_passes_mcp_servers_to_sdk(self) -> None:
+        """request should pass mcp_servers to SDK via ClaudeAgentOptions."""
+        from collections.abc import AsyncIterator
+        from unittest.mock import MagicMock
+
+        from claude_agent_sdk import ResultMessage
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "weather"
+        mock_tool.description = "Get weather"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool])
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        assert len(captured_options) == 1
+        assert captured_options[0].mcp_servers is not None
+        assert "pydantic_tools" in captured_options[0].mcp_servers
