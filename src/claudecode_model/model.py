@@ -7,6 +7,8 @@ from collections.abc import Iterable
 from functools import cached_property
 from typing import TYPE_CHECKING
 
+import anyio
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -18,11 +20,17 @@ from pydantic_ai.models import Model
 from pydantic_ai.profiles import ModelProfile
 
 from claudecode_model.cli import (
+    DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT_SECONDS,
-    ClaudeCodeCLI,
 )
-from claudecode_model.types import CLIResponse, JsonValue, RequestWithMetadataResult
+from claudecode_model.exceptions import CLIExecutionError
+from claudecode_model.types import (
+    CLIResponse,
+    CLIUsage,
+    JsonValue,
+    RequestWithMetadataResult,
+)
 
 if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestParameters
@@ -147,15 +155,162 @@ class ClaudeCodeModel(Model):
                 return model_request_parameters.output_object.json_schema
         return None
 
+    def _build_agent_options(
+        self,
+        system_prompt: str | None = None,
+        append_system_prompt: str | None = None,
+        max_budget_usd: float | None = None,
+        max_turns: int | None = None,
+        working_directory: str | None = None,
+        json_schema: dict[str, JsonValue] | None = None,
+    ) -> ClaudeAgentOptions:
+        """Build ClaudeAgentOptions from current parameters.
+
+        Args:
+            system_prompt: System prompt to include.
+            append_system_prompt: Additional system prompt to append.
+            max_budget_usd: Maximum budget in USD.
+            max_turns: Maximum number of turns.
+            working_directory: Working directory for execution.
+            json_schema: JSON schema for structured output.
+
+        Returns:
+            ClaudeAgentOptions configured with the provided parameters.
+        """
+        # Handle append_system_prompt
+        effective_system_prompt = system_prompt
+        if append_system_prompt:
+            if effective_system_prompt:
+                effective_system_prompt = (
+                    f"{effective_system_prompt}\n\n{append_system_prompt}"
+                )
+            else:
+                effective_system_prompt = append_system_prompt
+
+        # Build output_format if json_schema is provided
+        output_format: dict[str, JsonValue] | None = None
+        if json_schema is not None:
+            output_format = {"type": "json_schema", "schema": json_schema}
+
+        # Use provided values or fall back to instance defaults
+        effective_max_turns = max_turns if max_turns is not None else self._max_turns
+        effective_cwd = (
+            working_directory
+            if working_directory is not None
+            else self._working_directory
+        )
+
+        return ClaudeAgentOptions(
+            model=self._model_name,
+            cwd=effective_cwd,
+            allowed_tools=self._allowed_tools or [],
+            disallowed_tools=self._disallowed_tools or [],
+            permission_mode=self._permission_mode,  # type: ignore[arg-type]
+            max_turns=effective_max_turns,
+            max_budget_usd=max_budget_usd,
+            system_prompt=effective_system_prompt,
+            output_format=output_format,
+        )
+
+    async def _execute_sdk_query(
+        self,
+        prompt: str,
+        options: ClaudeAgentOptions,
+        timeout: float,
+    ) -> ResultMessage:
+        """Execute Claude Agent SDK query and return ResultMessage.
+
+        Args:
+            prompt: The user prompt to send.
+            options: ClaudeAgentOptions for the query.
+            timeout: Timeout in seconds.
+
+        Returns:
+            ResultMessage from the SDK.
+
+        Raises:
+            CLIExecutionError: If timeout occurs or no ResultMessage is received.
+        """
+        result_message: ResultMessage | None = None
+
+        async def run_query() -> ResultMessage:
+            nonlocal result_message
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, ResultMessage):
+                    result_message = message
+            if result_message is None:
+                raise CLIExecutionError(
+                    "No ResultMessage received from SDK",
+                    exit_code=None,
+                    stderr="Query completed but no ResultMessage was yielded",
+                    error_type="invalid_response",
+                    recoverable=False,
+                )
+            return result_message
+
+        # Use anyio.move_on_after for timeout handling
+        with anyio.move_on_after(timeout) as cancel_scope:
+            return await run_query()
+
+        if cancel_scope.cancelled_caught:
+            raise CLIExecutionError(
+                f"SDK query timed out after {timeout} seconds",
+                exit_code=-9,
+                stderr="Query was cancelled due to timeout",
+                error_type="timeout",
+                recoverable=True,
+            )
+
+        # This should never be reached, but satisfy type checker
+        raise CLIExecutionError(  # pragma: no cover
+            "Unexpected state in _execute_sdk_query",
+            exit_code=None,
+            stderr="",
+            error_type="unknown",
+            recoverable=False,
+        )
+
+    def _result_message_to_cli_response(self, result: ResultMessage) -> CLIResponse:
+        """Convert ResultMessage to CLIResponse for backward compatibility.
+
+        Args:
+            result: ResultMessage from Claude Agent SDK.
+
+        Returns:
+            CLIResponse with equivalent data.
+        """
+        usage_data = result.usage or {}
+
+        return CLIResponse(
+            type="result",
+            subtype=result.subtype,
+            is_error=result.is_error,
+            duration_ms=result.duration_ms,
+            duration_api_ms=result.duration_api_ms,
+            num_turns=result.num_turns,
+            result=result.result or "",
+            session_id=result.session_id,
+            total_cost_usd=result.total_cost_usd,
+            usage=CLIUsage(
+                input_tokens=usage_data.get("input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
+                cache_creation_input_tokens=usage_data.get(
+                    "cache_creation_input_tokens", 0
+                ),
+                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+            ),
+            structured_output=result.structured_output,
+        )
+
     async def _execute_request(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         json_schema: dict[str, JsonValue] | None = None,
     ) -> CLIResponse:
-        """Execute CLI request and return raw response.
+        """Execute SDK request and return raw response.
 
-        Internal method that handles the actual CLI execution logic.
+        Internal method that handles the actual SDK execution logic.
 
         Args:
             messages: The conversation messages.
@@ -163,13 +318,11 @@ class ClaudeCodeModel(Model):
             json_schema: Optional JSON schema for structured output.
 
         Returns:
-            CLIResponse containing the raw CLI output with all metadata.
+            CLIResponse containing the response with all metadata.
 
         Raises:
             ValueError: If no user prompt is found in messages.
-            CLINotFoundError: If the claude CLI is not found.
-            CLIExecutionError: If CLI execution fails.
-            CLIResponseParseError: If CLI output cannot be parsed.
+            CLIExecutionError: If SDK execution fails or times out.
         """
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
@@ -246,21 +399,26 @@ class ClaudeCodeModel(Model):
                     )
                 working_directory = wd_value
 
-        cli = ClaudeCodeCLI(
-            model=self._model_name,
-            working_directory=working_directory,
-            timeout=timeout,
-            allowed_tools=self._allowed_tools,
-            disallowed_tools=self._disallowed_tools,
-            permission_mode=self._permission_mode,
+        # Apply default max_turns for json_schema mode
+        effective_max_turns = max_turns
+        if json_schema is not None and effective_max_turns is None:
+            effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
+
+        # Build ClaudeAgentOptions
+        options = self._build_agent_options(
             system_prompt=system_prompt,
-            max_budget_usd=max_budget_usd,
             append_system_prompt=append_system_prompt,
-            max_turns=max_turns,
+            max_budget_usd=max_budget_usd,
+            max_turns=effective_max_turns,
+            working_directory=working_directory,
             json_schema=json_schema,
         )
 
-        return await cli.execute(user_prompt)
+        # Execute SDK query
+        result = await self._execute_sdk_query(user_prompt, options, timeout)
+
+        # Convert to CLIResponse for backward compatibility
+        return self._result_message_to_cli_response(result)
 
     async def request(
         self,
