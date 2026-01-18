@@ -219,6 +219,7 @@ class ClaudeCodeModel(Model):
             max_budget_usd=max_budget_usd,
             system_prompt=effective_system_prompt,
             output_format=output_format,
+            mcp_servers=self._mcp_servers,  # type: ignore[arg-type]
         )
 
     async def _execute_sdk_query(
