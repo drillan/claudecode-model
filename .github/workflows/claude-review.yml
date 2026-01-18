@@ -25,5 +25,5 @@ jobs:
       - uses: drillan/claude-pr-reviewer@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          anthropic_model: claude-opus-4-5
+          anthropic_model: claude-haiku-4-5
           review_language: Japanese
