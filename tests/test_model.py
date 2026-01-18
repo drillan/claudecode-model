@@ -1311,3 +1311,113 @@ class TestClaudeCodeModelStructuredOutput:
             # Verify json_schema is passed to CLI
             call_kwargs = mock_cli_class.call_args.kwargs
             assert call_kwargs.get("json_schema") == json_schema
+
+
+class TestClaudeCodeModelExtractJsonSchema:
+    """Tests for ClaudeCodeModel._extract_json_schema method."""
+
+    def test_extract_json_schema_with_native_mode_returns_schema(self) -> None:
+        """_extract_json_schema should return schema when output_mode is native."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        result = model._extract_json_schema(params)
+        assert result == json_schema
+
+    def test_extract_json_schema_with_native_mode_no_output_object_returns_none(
+        self,
+    ) -> None:
+        """_extract_json_schema should return None when output_mode is native but no output_object."""
+        model = ClaudeCodeModel()
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=None,
+        )
+
+        result = model._extract_json_schema(params)
+        assert result is None
+
+    def test_extract_json_schema_with_tool_mode_returns_none(self) -> None:
+        """_extract_json_schema should return None when output_mode is tool."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="tool",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        result = model._extract_json_schema(params)
+        assert result is None
+
+    def test_extract_json_schema_with_auto_mode_uses_profile_default(self) -> None:
+        """_extract_json_schema should use profile default when output_mode is auto.
+
+        When pydantic-ai Agent sets output_type, it calls with output_mode='auto'.
+        The model should resolve 'auto' to profile.default_structured_output_mode.
+        """
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        # Verify profile default is 'native'
+        assert model.profile.default_structured_output_mode == "native"
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="auto",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        result = model._extract_json_schema(params)
+        # Should return schema because auto resolves to native
+        assert result == json_schema
+
+    def test_extract_json_schema_with_auto_mode_no_output_object_returns_none(
+        self,
+    ) -> None:
+        """_extract_json_schema should return None when output_mode is auto but no output_object."""
+        model = ClaudeCodeModel()
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="auto",
+            output_object=None,
+        )
+
+        result = model._extract_json_schema(params)
+        assert result is None
