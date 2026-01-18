@@ -20,7 +20,7 @@ from pydantic_ai.models import ModelRequestParameters
 from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import ClaudeCodeModelSettings
 
-# Check if claude command is available
+# Skip tests if claude CLI is not installed; E2E tests require the real SDK
 CLAUDE_AVAILABLE = shutil.which("claude") is not None
 
 requires_claude = pytest.mark.skipif(
@@ -51,6 +51,11 @@ class TestClaudeCodeModelE2E:
 
         assert response is not None
         assert len(response.parts) > 0
+        # Verify response content is a non-empty string (TextPart)
+        first_part = response.parts[0]
+        assert hasattr(first_part, "content")
+        assert isinstance(first_part.content, str)
+        assert len(first_part.content) > 0
 
     @requires_claude
     @pytest.mark.asyncio
@@ -93,14 +98,14 @@ class TestClaudeCodeModelE2E:
         assert result.response is not None
         assert result.cli_response is not None
         assert result.cli_response.usage is not None
-        assert result.cli_response.usage.input_tokens >= 0
-        assert result.cli_response.usage.output_tokens >= 0
+        assert result.cli_response.usage.input_tokens > 0
+        assert result.cli_response.usage.output_tokens > 0
         assert result.cli_response.session_id is not None
 
     @requires_claude
     @pytest.mark.asyncio
     async def test_request_with_model_settings_timeout(self) -> None:
-        """Request should respect timeout from model_settings."""
+        """Request with custom timeout setting should complete successfully."""
         model = ClaudeCodeModel(
             permission_mode="bypassPermissions",
             max_turns=1,
