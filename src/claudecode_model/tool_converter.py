@@ -247,7 +247,9 @@ def convert_tool_with_deps(tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
     input_schema = tool_def.parameters_json_schema
 
     # Create deps context with validation (raises UnsupportedDepsTypeError if not serializable)
-    # Cast to DepsContext[object] for type compatibility with _create_async_handler
+    # DepsContext[T] is invariant, but we only read deps via the .deps property,
+    # so widening to DepsContext[object] is safe at runtime. The type: ignore
+    # suppresses the assignment error from T -> object covariance mismatch.
     deps_context: DepsContext[object] = create_deps_context(deps)  # type: ignore[assignment]
 
     handler = _create_async_handler(

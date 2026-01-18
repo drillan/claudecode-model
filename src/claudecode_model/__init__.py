@@ -10,6 +10,7 @@ from claudecode_model.deps_support import (
     DepsContext,
     create_deps_context,
     deserialize_deps,
+    is_instance_serializable,
     is_serializable_type,
     serialize_deps,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "DepsContext",
     "create_deps_context",
     "is_serializable_type",
+    "is_instance_serializable",
     "serialize_deps",
     "deserialize_deps",
 ]

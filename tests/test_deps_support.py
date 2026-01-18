@@ -406,6 +406,86 @@ class TestCreateSerializableDepsContext:
             asyncio.run(client.aclose())
 
 
+class TestIsInstanceSerializable:
+    """Tests for is_instance_serializable function (public API)."""
+
+    def test_primitive_instances_are_serializable(self) -> None:
+        """Primitive instances (str, int, float, bool) should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable("hello") is True
+        assert is_instance_serializable(42) is True
+        assert is_instance_serializable(3.14) is True
+        assert is_instance_serializable(True) is True
+        assert is_instance_serializable(False) is True
+
+    def test_none_is_serializable(self) -> None:
+        """None should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable(None) is True
+
+    def test_dict_instance_is_serializable(self) -> None:
+        """dict instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable({"key": "value"}) is True
+        assert is_instance_serializable({}) is True
+
+    def test_list_instance_is_serializable(self) -> None:
+        """list instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable([1, 2, 3]) is True
+        assert is_instance_serializable([]) is True
+
+    def test_dataclass_instance_is_serializable(self) -> None:
+        """dataclass instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        instance = AppSettings(debug=True, max_retries=3, base_url="http://example.com")
+        assert is_instance_serializable(instance) is True
+
+    def test_pydantic_model_instance_is_serializable(self) -> None:
+        """Pydantic BaseModel instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        instance = UserConfig(username="alice", api_key="secret")
+        assert is_instance_serializable(instance) is True
+
+    def test_httpx_client_instance_is_not_serializable(self) -> None:
+        """httpx.AsyncClient instance should not be serializable."""
+        import asyncio
+
+        import httpx
+
+        from claudecode_model.deps_support import is_instance_serializable
+
+        client = httpx.AsyncClient()
+        try:
+            assert is_instance_serializable(client) is False
+        finally:
+            asyncio.run(client.aclose())
+
+    def test_arbitrary_class_instance_is_not_serializable(self) -> None:
+        """Arbitrary class instance should not be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        class SomeClass:
+            pass
+
+        instance = SomeClass()
+        assert is_instance_serializable(instance) is False
+
+    def test_dataclass_type_is_not_instance_serializable(self) -> None:
+        """dataclass type (not instance) should not be considered instance serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        # is_instance_serializable checks instances, not types
+        # A dataclass type itself is not an instance of dataclass
+        assert is_instance_serializable(AppSettings) is False
+
+
 class TestDepsContextConstructorValidation:
     """Tests for DepsContext constructor validation."""
 

@@ -99,12 +99,9 @@ def is_serializable_type(deps_type: type | object) -> bool:
         return _is_dataclass_serializable(deps_type)
 
     # Check Pydantic BaseModel
-    try:
-        if isinstance(deps_type, type) and issubclass(deps_type, BaseModel):
-            return True
-    except TypeError:
-        # issubclass raises TypeError for non-class types
-        pass
+    # isinstance(deps_type, type) ensures issubclass won't raise TypeError
+    if isinstance(deps_type, type) and issubclass(deps_type, BaseModel):
+        return True
 
     return False
 
@@ -131,7 +128,13 @@ def _is_dataclass_serializable(dc_type: type) -> bool:
         field_type = type_hints.get(field.name, field.type)
         # Handle string annotations (forward references that couldn't be resolved)
         if isinstance(field_type, str):
-            # String annotations are assumed serializable (permissive approach)
+            logger.warning(
+                "Unresolved forward reference '%s' for field '%s' in %s. "
+                "Assuming serializable (permissive approach).",
+                field_type,
+                field.name,
+                dc_type.__name__,
+            )
             continue
         # For nested types, recursively check
         if isinstance(field_type, type):
