@@ -2236,11 +2236,15 @@ class TestClaudeCodeModelSetAgentToolsets:
         """set_agent_toolsets should register toolsets internally."""
         from unittest.mock import MagicMock
 
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
         model = ClaudeCodeModel()
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool"
         mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
 
         model.set_agent_toolsets([mock_tool])
 
@@ -2251,11 +2255,15 @@ class TestClaudeCodeModelSetAgentToolsets:
         """set_agent_toolsets should create MCP server from toolsets."""
         from unittest.mock import MagicMock
 
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
         model = ClaudeCodeModel()
         mock_tool = MagicMock()
         mock_tool.name = "search"
         mock_tool.description = "Search documents"
         mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
 
         model.set_agent_toolsets([mock_tool])
 
@@ -2281,16 +2289,21 @@ class TestClaudeCodeModelSetAgentToolsets:
         """set_agent_toolsets should handle multiple tools."""
         from unittest.mock import MagicMock
 
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
         model = ClaudeCodeModel()
         mock_tool1 = MagicMock()
         mock_tool1.name = "tool1"
         mock_tool1.description = "Tool 1"
         mock_tool1.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool1.function = dummy_func
 
         mock_tool2 = MagicMock()
         mock_tool2.name = "tool2"
         mock_tool2.description = "Tool 2"
         mock_tool2.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool2.function = dummy_func
 
         model.set_agent_toolsets([mock_tool1, mock_tool2])
 
@@ -2301,13 +2314,41 @@ class TestClaudeCodeModelSetAgentToolsets:
         """get_mcp_servers should return registered MCP servers."""
         from unittest.mock import MagicMock
 
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
         model = ClaudeCodeModel()
         mock_tool = MagicMock()
         mock_tool.name = "test"
         mock_tool.description = "Test"
         mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
 
         model.set_agent_toolsets([mock_tool])
 
         servers = model.get_mcp_servers()
         assert "pydantic_tools" in servers
+
+    def test_get_mcp_servers_returns_empty_dict_before_set_agent_toolsets(self) -> None:
+        """get_mcp_servers should return empty dict before set_agent_toolsets."""
+        model = ClaudeCodeModel()
+        servers = model.get_mcp_servers()
+        assert servers == {}
+
+    def test_set_agent_toolsets_logs_warning_on_overwrite(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """set_agent_toolsets should log warning when overwriting existing toolsets."""
+        import logging
+
+        model = ClaudeCodeModel()
+
+        # First call - no warning
+        model.set_agent_toolsets([])
+
+        # Second call - should log warning
+        with caplog.at_level(logging.WARNING):
+            model.set_agent_toolsets(None)
+
+        assert "Overwriting" in caplog.text
+        assert "pydantic_tools" in caplog.text

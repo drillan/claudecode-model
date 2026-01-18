@@ -28,6 +28,7 @@ from claudecode_model.cli import (
 )
 from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.mcp_integration import (
+    MCP_SERVER_NAME,
     PydanticAITool,
     create_mcp_server_from_tools,
 )
@@ -531,10 +532,20 @@ class ClaudeCodeModel(Model):
 
         Args:
             toolsets: Sequence of pydantic-ai tool objects or None.
+
+        Note:
+            Calling this method multiple times will overwrite the previous toolsets.
+            A warning is logged when overwriting existing toolsets.
         """
+        if MCP_SERVER_NAME in self._mcp_servers:
+            logger.warning(
+                "Overwriting existing MCP server '%s'. "
+                "Previous toolsets will be replaced.",
+                MCP_SERVER_NAME,
+            )
         self._agent_toolsets = toolsets
-        self._mcp_servers["pydantic_tools"] = create_mcp_server_from_tools(
-            name="pydantic-tools",
+        self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
+            name=MCP_SERVER_NAME,
             toolsets=toolsets,
         )
 
