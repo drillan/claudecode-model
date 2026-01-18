@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from claude_agent_sdk.types import McpSdkServerConfig
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -26,6 +27,11 @@ from claudecode_model.cli import (
     TIMEOUT_EXIT_CODE,
 )
 from claudecode_model.exceptions import CLIExecutionError
+from claudecode_model.mcp_integration import (
+    MCP_SERVER_NAME,
+    PydanticAITool,
+    create_mcp_server_from_tools,
+)
 from claudecode_model.types import (
     CLIResponse,
     CLIUsage,
@@ -61,6 +67,8 @@ class ClaudeCodeModel(Model):
         self._disallowed_tools = disallowed_tools
         self._permission_mode = permission_mode
         self._max_turns = max_turns
+        self._mcp_servers: dict[str, McpSdkServerConfig] = {}
+        self._agent_toolsets: Sequence[PydanticAITool] | None = None
 
     @property
     def model_name(self) -> str:
@@ -516,6 +524,38 @@ class ClaudeCodeModel(Model):
             response=cli_response.to_model_response(model_name=self._model_name),
             cli_response=cli_response,
         )
+
+    def set_agent_toolsets(self, toolsets: Sequence[PydanticAITool] | None) -> None:
+        """Register pydantic-ai Agent toolsets for MCP server exposure.
+
+        Converts pydantic-ai tools to an MCP server that can be used by Claude.
+
+        Args:
+            toolsets: Sequence of pydantic-ai tool objects or None.
+
+        Note:
+            Calling this method multiple times will overwrite the previous toolsets.
+            A warning is logged when overwriting existing toolsets.
+        """
+        if MCP_SERVER_NAME in self._mcp_servers:
+            logger.warning(
+                "Overwriting existing MCP server '%s'. "
+                "Previous toolsets will be replaced.",
+                MCP_SERVER_NAME,
+            )
+        self._agent_toolsets = toolsets
+        self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
+            name=MCP_SERVER_NAME,
+            toolsets=toolsets,
+        )
+
+    def get_mcp_servers(self) -> dict[str, McpSdkServerConfig]:
+        """Return registered MCP servers.
+
+        Returns:
+            Dictionary mapping server names to McpSdkServerConfig objects.
+        """
+        return self._mcp_servers
 
     def __repr__(self) -> str:
         return f"ClaudeCodeModel(model_name={self._model_name!r})"
