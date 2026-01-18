@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from claudecode_model.cli import (
+    DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_PROMPT_LENGTH,
@@ -676,6 +677,33 @@ class TestClaudeCodeCLIJsonSchema:
                 parsed["properties"]["message"]["description"]
                 == "\u65e5\u672c\u8a9e\u306e\u8aac\u660e"
             )
+
+    def test_json_schema_sets_default_max_turns(self) -> None:
+        """_build_command should set default max_turns=3 when json_schema is set."""
+        schema: dict[str, JsonValue] = {"type": "object"}
+        cli = ClaudeCodeCLI(json_schema=schema)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--max-turns" in cmd
+            max_turns_index = cmd.index("--max-turns")
+            assert cmd[max_turns_index + 1] == str(DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA)
+
+    def test_json_schema_respects_explicit_max_turns(self) -> None:
+        """_build_command should use explicit max_turns when set with json_schema."""
+        schema: dict[str, JsonValue] = {"type": "object"}
+        cli = ClaudeCodeCLI(json_schema=schema, max_turns=5)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--max-turns" in cmd
+            max_turns_index = cmd.index("--max-turns")
+            assert cmd[max_turns_index + 1] == "5"
+
+    def test_no_json_schema_no_default_max_turns(self) -> None:
+        """_build_command should not set max_turns when json_schema is not set."""
+        cli = ClaudeCodeCLI()
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--max-turns" not in cmd
 
 
 class TestClaudeCodeCLIErrorsWarning:

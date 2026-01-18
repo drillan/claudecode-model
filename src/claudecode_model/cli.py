@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "claude-sonnet-4-5"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_PROMPT_LENGTH = 1_000_000  # 1MB limit
+DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA = 3
 
 
 class ClaudeCodeCLI:
@@ -129,12 +130,15 @@ class ClaudeCodeCLI:
         if self.append_system_prompt:
             cmd.extend(["--append-system-prompt", self.append_system_prompt])
 
-        if self.max_turns is not None:
-            cmd.extend(["--max-turns", str(self.max_turns)])
-
+        effective_max_turns = self.max_turns
         if self.json_schema is not None:
+            if effective_max_turns is None:
+                effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
             schema_json = json.dumps(self.json_schema, ensure_ascii=False)
             cmd.extend(["--json-schema", schema_json])
+
+        if effective_max_turns is not None:
+            cmd.extend(["--max-turns", str(effective_max_turns)])
 
         cmd.append("--")  # End of options marker
         cmd.append(prompt)
