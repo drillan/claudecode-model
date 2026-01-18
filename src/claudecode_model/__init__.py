@@ -10,6 +10,7 @@ from claudecode_model.deps_support import (
     DepsContext,
     create_deps_context,
     deserialize_deps,
+    is_instance_serializable,
     is_serializable_type,
     serialize_deps,
 )
@@ -19,6 +20,7 @@ from claudecode_model.exceptions import (
     CLIResponseParseError,
     ClaudeCodeError,
     ErrorType,
+    TypeHintResolutionError,
     UnsupportedDepsTypeError,
 )
 from claudecode_model.json_utils import extract_json
@@ -62,6 +64,7 @@ __all__ = [
     "CLIExecutionError",
     "CLIResponseParseError",
     "UnsupportedDepsTypeError",
+    "TypeHintResolutionError",
     "ErrorType",
     "RequestWithMetadataResult",
     "DEFAULT_MODEL",
@@ -85,6 +88,7 @@ __all__ = [
     "DepsContext",
     "create_deps_context",
     "is_serializable_type",
+    "is_instance_serializable",
     "serialize_deps",
     "deserialize_deps",
 ]

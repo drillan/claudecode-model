@@ -22,15 +22,20 @@ Unsupported types (will raise UnsupportedDepsTypeError):
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, fields, is_dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar, get_type_hints
+from types import UnionType
+from typing import Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 
+from dacite import from_dict
 from pydantic import BaseModel
 
-from claudecode_model.exceptions import UnsupportedDepsTypeError
+from claudecode_model.exceptions import (
+    TypeHintResolutionError,
+    UnsupportedDepsTypeError,
+)
 
-if TYPE_CHECKING:
-    pass
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -38,8 +43,11 @@ T = TypeVar("T")
 _PRIMITIVE_TYPES: tuple[type, ...] = (str, int, float, bool, type(None))
 
 
-def is_serializable_type(deps_type: type) -> bool:
+def is_serializable_type(deps_type: type | object) -> bool:
     """Check if a dependency type is serializable.
+
+    Supports both simple types and generic types like list[str], dict[str, int],
+    and Optional[str] (str | None).
 
     Args:
         deps_type: The type to check for serializability.
@@ -52,6 +60,10 @@ def is_serializable_type(deps_type: type) -> bool:
         True
         >>> is_serializable_type(dict)
         True
+        >>> is_serializable_type(list[str])
+        True
+        >>> is_serializable_type(dict[str, int])
+        True
         >>> from dataclasses import dataclass
         >>> @dataclass
         ... class Config:
@@ -59,11 +71,26 @@ def is_serializable_type(deps_type: type) -> bool:
         >>> is_serializable_type(Config)
         True
     """
+    # Handle generic types (list[str], dict[str, int], etc.)
+    origin = get_origin(deps_type)
+    if origin is not None:
+        # For Union types (including Optional), check all args
+        if origin is Union or isinstance(deps_type, UnionType):
+            args = get_args(deps_type)
+            return all(is_serializable_type(arg) for arg in args)
+
+        # For list[T] and dict[K, V], check the origin and args
+        if origin in (list, dict):
+            args = get_args(deps_type)
+            return all(is_serializable_type(arg) for arg in args)
+
+        return False
+
     # Check primitive types
     if deps_type in _PRIMITIVE_TYPES:
         return True
 
-    # Check dict and list
+    # Check dict and list (without type parameters)
     if deps_type in (dict, list):
         return True
 
@@ -72,12 +99,9 @@ def is_serializable_type(deps_type: type) -> bool:
         return _is_dataclass_serializable(deps_type)
 
     # Check Pydantic BaseModel
-    try:
-        if isinstance(deps_type, type) and issubclass(deps_type, BaseModel):
-            return True
-    except TypeError:
-        # issubclass raises TypeError for non-class types
-        pass
+    # isinstance(deps_type, type) ensures issubclass won't raise TypeError
+    if isinstance(deps_type, type) and issubclass(deps_type, BaseModel):
+        return True
 
     return False
 
@@ -90,18 +114,27 @@ def _is_dataclass_serializable(dc_type: type) -> bool:
 
     Returns:
         True if all fields have serializable types.
+
+    Raises:
+        TypeHintResolutionError: If forward references cannot be resolved.
     """
     try:
         type_hints = get_type_hints(dc_type)
-    except Exception:
-        # If we can't get type hints, check field types directly
-        type_hints = {}
+    except NameError as e:
+        # Forward references that cannot be resolved - raise error instead of silent fallback
+        raise TypeHintResolutionError(dc_type.__name__, e) from e
 
     for field in fields(dc_type):
         field_type = type_hints.get(field.name, field.type)
-        # Handle string annotations
+        # Handle string annotations (forward references that couldn't be resolved)
         if isinstance(field_type, str):
-            # String annotations are assumed serializable (conservative)
+            logger.warning(
+                "Unresolved forward reference '%s' for field '%s' in %s. "
+                "Assuming serializable (permissive approach).",
+                field_type,
+                field.name,
+                dc_type.__name__,
+            )
             continue
         # For nested types, recursively check
         if isinstance(field_type, type):
@@ -135,7 +168,7 @@ def serialize_deps(deps: object) -> str:
     """
     # Check if type is serializable
     deps_type = type(deps)
-    if not _is_instance_serializable(deps):
+    if not is_instance_serializable(deps):
         raise UnsupportedDepsTypeError(deps_type.__name__)
 
     # Serialize based on type
@@ -149,7 +182,7 @@ def serialize_deps(deps: object) -> str:
     return json.dumps(deps)
 
 
-def _is_instance_serializable(obj: object) -> bool:
+def is_instance_serializable(obj: object) -> bool:
     """Check if an instance is serializable.
 
     Args:
@@ -203,9 +236,9 @@ def deserialize_deps(json_str: str, deps_type: type[T]) -> T:
     if isinstance(deps_type, type) and issubclass(deps_type, BaseModel):
         return deps_type.model_validate(data)  # type: ignore[return-value]
 
-    # Handle dataclass
+    # Handle dataclass - use dacite for recursive deserialization
     if is_dataclass(deps_type) and isinstance(deps_type, type):
-        return deps_type(**data)  # type: ignore[return-value]
+        return from_dict(data_class=deps_type, data=data)  # type: ignore[return-value]
 
     # Handle primitives and collections - just return parsed data
     return data  # type: ignore[return-value]
@@ -222,6 +255,19 @@ class DepsContext(Generic[T]):
 
     Warning:
         This is an experimental feature providing minimal RunContext emulation.
+
+    Examples:
+        >>> from dataclasses import dataclass
+        >>> @dataclass
+        ... class ApiConfig:
+        ...     base_url: str
+        ...     api_key: str
+        >>> config = ApiConfig(base_url="https://api.example.com", api_key="secret")
+        >>> ctx = DepsContext(config)
+        >>> ctx.deps.base_url
+        'https://api.example.com'
+        >>> ctx.deps.api_key
+        'secret'
     """
 
     def __init__(self, deps: T) -> None:
@@ -229,7 +275,12 @@ class DepsContext(Generic[T]):
 
         Args:
             deps: The dependency object to provide.
+
+        Raises:
+            UnsupportedDepsTypeError: If deps is not serializable.
         """
+        if not is_instance_serializable(deps):
+            raise UnsupportedDepsTypeError(type(deps).__name__)
         self._deps = deps
 
     @property
@@ -259,7 +310,5 @@ def create_deps_context(deps: T) -> DepsContext[T]:
         >>> ctx.deps
         {'api_key': 'secret'}
     """
-    if not _is_instance_serializable(deps):
-        raise UnsupportedDepsTypeError(type(deps).__name__)
-
+    # Validation is performed in DepsContext.__init__
     return DepsContext(deps)

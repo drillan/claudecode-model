@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-    pass
 
 
 class UserConfig(BaseModel):
@@ -97,6 +93,56 @@ class TestIsSerializableType:
             pass
 
         assert is_serializable_type(SomeClass) is False
+
+
+class TestGenericTypeSerializability:
+    """Tests for generic type serializability checking."""
+
+    def test_list_with_str_is_serializable(self) -> None:
+        """list[str] should be serializable."""
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(list[str]) is True
+
+    def test_list_with_int_is_serializable(self) -> None:
+        """list[int] should be serializable."""
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(list[int]) is True
+
+    def test_dict_with_str_int_is_serializable(self) -> None:
+        """dict[str, int] should be serializable."""
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(dict[str, int]) is True
+
+    def test_optional_str_is_serializable(self) -> None:
+        """Optional[str] (str | None) should be serializable."""
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(str | None) is True
+
+    def test_list_with_non_serializable_is_not_serializable(self) -> None:
+        """list[SomeClass] where SomeClass is not serializable should fail."""
+        import httpx
+
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(list[httpx.AsyncClient]) is False
+
+    def test_nested_generic_is_serializable(self) -> None:
+        """list[dict[str, int]] should be serializable."""
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(list[dict[str, int]]) is True
+
+    def test_union_with_non_serializable_is_not_serializable(self) -> None:
+        """Union with non-serializable type should fail."""
+        import httpx
+
+        from claudecode_model.deps_support import is_serializable_type
+
+        assert is_serializable_type(str | httpx.AsyncClient) is False
 
 
 class TestSerializeDeps:
@@ -251,6 +297,36 @@ class TestDeserializeDeps:
         assert deserialize_deps("true", bool) is True
         assert deserialize_deps("null", type(None)) is None
 
+    def test_deserializes_nested_dataclass(self) -> None:
+        """Nested dataclass should deserialize recursively."""
+        from claudecode_model.deps_support import deserialize_deps
+
+        json_str = json.dumps(
+            {
+                "name": "test",
+                "inner": {
+                    "debug": False,
+                    "max_retries": 5,
+                    "base_url": "http://localhost",
+                },
+            }
+        )
+        result = deserialize_deps(json_str, NestedSettings)
+
+        assert isinstance(result, NestedSettings)
+        assert result.name == "test"
+        assert isinstance(result.inner, AppSettings)
+        assert result.inner.debug is False
+        assert result.inner.max_retries == 5
+        assert result.inner.base_url == "http://localhost"
+
+    def test_raises_on_invalid_json(self) -> None:
+        """Invalid JSON should raise json.JSONDecodeError."""
+        from claudecode_model.deps_support import deserialize_deps
+
+        with pytest.raises(json.JSONDecodeError):
+            deserialize_deps("not valid json", dict)
+
 
 class TestUnsupportedDepsTypeError:
     """Tests for UnsupportedDepsTypeError exception."""
@@ -310,3 +386,130 @@ class TestCreateSerializableDepsContext:
         context = create_deps_context(deps)
 
         assert context.deps == deps
+
+    def test_create_deps_context_raises_on_non_serializable(self) -> None:
+        """create_deps_context should raise UnsupportedDepsTypeError for non-serializable deps."""
+        import asyncio
+
+        import httpx
+
+        from claudecode_model.deps_support import create_deps_context
+        from claudecode_model.exceptions import UnsupportedDepsTypeError
+
+        client = httpx.AsyncClient()
+        try:
+            with pytest.raises(UnsupportedDepsTypeError) as exc_info:
+                create_deps_context(client)
+
+            assert "AsyncClient" in str(exc_info.value)
+        finally:
+            asyncio.run(client.aclose())
+
+
+class TestIsInstanceSerializable:
+    """Tests for is_instance_serializable function (public API)."""
+
+    def test_primitive_instances_are_serializable(self) -> None:
+        """Primitive instances (str, int, float, bool) should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable("hello") is True
+        assert is_instance_serializable(42) is True
+        assert is_instance_serializable(3.14) is True
+        assert is_instance_serializable(True) is True
+        assert is_instance_serializable(False) is True
+
+    def test_none_is_serializable(self) -> None:
+        """None should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable(None) is True
+
+    def test_dict_instance_is_serializable(self) -> None:
+        """dict instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable({"key": "value"}) is True
+        assert is_instance_serializable({}) is True
+
+    def test_list_instance_is_serializable(self) -> None:
+        """list instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        assert is_instance_serializable([1, 2, 3]) is True
+        assert is_instance_serializable([]) is True
+
+    def test_dataclass_instance_is_serializable(self) -> None:
+        """dataclass instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        instance = AppSettings(debug=True, max_retries=3, base_url="http://example.com")
+        assert is_instance_serializable(instance) is True
+
+    def test_pydantic_model_instance_is_serializable(self) -> None:
+        """Pydantic BaseModel instance should be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        instance = UserConfig(username="alice", api_key="secret")
+        assert is_instance_serializable(instance) is True
+
+    def test_httpx_client_instance_is_not_serializable(self) -> None:
+        """httpx.AsyncClient instance should not be serializable."""
+        import asyncio
+
+        import httpx
+
+        from claudecode_model.deps_support import is_instance_serializable
+
+        client = httpx.AsyncClient()
+        try:
+            assert is_instance_serializable(client) is False
+        finally:
+            asyncio.run(client.aclose())
+
+    def test_arbitrary_class_instance_is_not_serializable(self) -> None:
+        """Arbitrary class instance should not be serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        class SomeClass:
+            pass
+
+        instance = SomeClass()
+        assert is_instance_serializable(instance) is False
+
+    def test_dataclass_type_is_not_instance_serializable(self) -> None:
+        """dataclass type (not instance) should not be considered instance serializable."""
+        from claudecode_model.deps_support import is_instance_serializable
+
+        # is_instance_serializable checks instances, not types
+        # A dataclass type itself is not an instance of dataclass
+        assert is_instance_serializable(AppSettings) is False
+
+
+class TestDepsContextConstructorValidation:
+    """Tests for DepsContext constructor validation."""
+
+    def test_deps_context_constructor_raises_on_non_serializable(self) -> None:
+        """DepsContext constructor should raise UnsupportedDepsTypeError for non-serializable deps."""
+        import asyncio
+
+        import httpx
+
+        from claudecode_model.deps_support import DepsContext
+        from claudecode_model.exceptions import UnsupportedDepsTypeError
+
+        client = httpx.AsyncClient()
+        try:
+            with pytest.raises(UnsupportedDepsTypeError) as exc_info:
+                DepsContext(client)
+
+            assert "AsyncClient" in str(exc_info.value)
+        finally:
+            asyncio.run(client.aclose())
+
+    def test_deps_context_constructor_allows_serializable_deps(self) -> None:
+        """DepsContext constructor should allow serializable deps."""
+        from claudecode_model.deps_support import DepsContext
+
+        ctx = DepsContext({"api_key": "secret"})
+        assert ctx.deps == {"api_key": "secret"}

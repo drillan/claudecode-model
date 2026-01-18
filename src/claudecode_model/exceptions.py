@@ -79,3 +79,24 @@ class UnsupportedDepsTypeError(ClaudeCodeError):
         )
         super().__init__(message)
         self.type_name = type_name
+
+
+class TypeHintResolutionError(ClaudeCodeError):
+    """Raised when type hints cannot be resolved for a dataclass.
+
+    This error is raised when forward references in type hints
+    cannot be resolved during serializability checking.
+
+    Attributes:
+        type_name: Name of the dataclass with unresolvable type hints.
+        original_error: The original NameError that caused the resolution failure.
+    """
+
+    def __init__(self, type_name: str, original_error: NameError) -> None:
+        message = (
+            f"Cannot resolve type hints for dataclass '{type_name}': {original_error}. "
+            "Ensure all referenced types are imported and available."
+        )
+        super().__init__(message)
+        self.type_name = type_name
+        self.original_error = original_error
