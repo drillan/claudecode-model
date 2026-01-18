@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -675,3 +676,150 @@ class TestClaudeCodeCLIJsonSchema:
                 parsed["properties"]["message"]["description"]
                 == "\u65e5\u672c\u8a9e\u306e\u8aac\u660e"
             )
+
+
+class TestClaudeCodeCLIErrorsWarning:
+    """Tests for CLI warning when errors field is non-empty (Review Comment #4)."""
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_errors_present(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """execute should log warning when response contains non-empty errors list."""
+        cli = ClaudeCodeCLI()
+
+        response_json = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "duration_ms": 1000,
+                "duration_api_ms": 800,
+                "num_turns": 1,
+                "result": "",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+                "errors": ["validation error 1", "validation error 2"],
+                "structured_output": {"partial": "data"},
+            }
+        )
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(response_json.encode(), b""))
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/claude"),
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ),
+            caplog.at_level(logging.WARNING, logger="claudecode_model.cli"),
+        ):
+            response = await cli.execute("test")
+
+            # Response should still be returned
+            assert response.errors is not None
+            assert len(response.errors) == 2
+
+            # Warning should be logged
+            assert len(caplog.records) == 1
+            assert "errors" in caplog.records[0].message.lower()
+            assert "validation error 1" in caplog.records[0].message
+            assert "validation error 2" in caplog.records[0].message
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_errors_empty(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """execute should not log warning when errors list is empty."""
+        cli = ClaudeCodeCLI()
+
+        response_json = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "duration_ms": 1000,
+                "duration_api_ms": 800,
+                "num_turns": 1,
+                "result": "",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+                "errors": [],
+                "structured_output": {"data": "value"},
+            }
+        )
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(response_json.encode(), b""))
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/claude"),
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ),
+            caplog.at_level(logging.WARNING, logger="claudecode_model.cli"),
+        ):
+            response = await cli.execute("test")
+
+            # Response should be returned
+            assert response.errors == []
+
+            # No warning should be logged
+            assert len(caplog.records) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_errors_none(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """execute should not log warning when errors is None (normal mode)."""
+        cli = ClaudeCodeCLI()
+
+        response_json = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "duration_ms": 1000,
+                "duration_api_ms": 800,
+                "num_turns": 1,
+                "result": "Hello!",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            }
+        )
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(response_json.encode(), b""))
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/claude"),
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ),
+            caplog.at_level(logging.WARNING, logger="claudecode_model.cli"),
+        ):
+            response = await cli.execute("test")
+
+            # Response should be returned
+            assert response.errors is None
+
+            # No warning should be logged
+            assert len(caplog.records) == 0

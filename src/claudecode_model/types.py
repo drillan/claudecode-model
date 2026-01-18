@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import NamedTuple, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
@@ -157,6 +157,7 @@ class CLIResponseData(TypedDict, total=False):
     permission_denials: list[PermissionDenialData]
     uuid: str
     structured_output: dict[str, JsonValue]
+    errors: list[str]
 
 
 class CLIUsage(BaseModel):
@@ -180,7 +181,7 @@ class CLIResponse(BaseModel):
     duration_ms: int
     duration_api_ms: int
     num_turns: int
-    result: str
+    result: str = ""
     session_id: str | None = None
     total_cost_usd: float | None = None
     usage: CLIUsage
@@ -190,8 +191,26 @@ class CLIResponse(BaseModel):
     permission_denials: list[PermissionDenial] | None = None
     uuid: str | None = None
     structured_output: dict[str, JsonValue] | None = None
+    errors: list[str] | None = Field(
+        default=None,
+        description="Validation errors from --json-schema mode. "
+        "When present, indicates schema validation issues occurred.",
+    )
 
     model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validate_result_or_structured_output(self) -> "CLIResponse":
+        """Ensure at least result or structured_output has meaningful content.
+
+        Prevents silent failures where both result is empty and structured_output is None.
+        """
+        if not self.result and self.structured_output is None:
+            raise ValueError(
+                "Either result must be non-empty or structured_output must be provided. "
+                "Both cannot be empty/None simultaneously."
+            )
+        return self
 
     def to_model_response(self, model_name: str | None = None) -> ModelResponse:
         """Convert CLI response to pydantic-ai ModelResponse.

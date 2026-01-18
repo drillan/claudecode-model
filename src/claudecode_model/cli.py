@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 
 from claudecode_model.exceptions import (
@@ -17,6 +18,8 @@ from claudecode_model.types import (
     JsonValue,
     parse_cli_response,
 )
+
+logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -245,6 +248,13 @@ class ClaudeCodeCLI:
                 stderr=response.result,
                 error_type="invalid_response",
                 recoverable=False,
+            )
+
+        # Log warning if errors are present (json-schema validation errors)
+        if response.errors:
+            logger.warning(
+                "CLI response contains validation errors (--json-schema mode): %s",
+                response.errors,
             )
 
         return response
