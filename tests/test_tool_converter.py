@@ -4,13 +4,40 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any, cast
 
+import httpx
 import pytest
 from claude_agent_sdk import SdkMcpTool
+from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 
 from claudecode_model.tool_converter import JsonSchema
+
+
+# Deps types for serializable deps tests (defined at module level for type resolution)
+# Note: Using underscore prefix to avoid pytest collection warnings
+@dataclass
+class _DictDeps:
+    """Dataclass for dict-like deps."""
+
+    api_url: str
+    timeout: int
+
+
+class _ApiConfig(BaseModel):
+    """Pydantic model for API config deps."""
+
+    base_url: str
+    api_key: str
+
+
+@dataclass
+class _MyDeps:
+    """Dataclass for schema test."""
+
+    value: str
 
 
 def _get_input_schema(tool: SdkMcpTool[JsonSchema]) -> dict[str, Any]:
@@ -522,3 +549,113 @@ class TestConvertToolsToMcpServer:
         )
 
         assert result["version"] == "2.0.0"
+
+
+class TestSerializableDepsSupport:
+    """Tests for serializable dependency support in tool_converter."""
+
+    def test_converts_tool_with_dict_deps(self) -> None:
+        """Tool with dict deps should convert and execute correctly."""
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        agent: Agent[_DictDeps] = Agent("test")
+        received_deps: dict[str, object] = {}
+
+        @agent.tool
+        def fetch_data(ctx: RunContext[_DictDeps], query: str) -> str:
+            """Fetch data using deps."""
+            received_deps["api_url"] = ctx.deps.api_url
+            received_deps["timeout"] = ctx.deps.timeout
+            return f"Fetched: {query}"
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        deps = _DictDeps(api_url="https://api.example.com", timeout=30)
+        result = convert_tool_with_deps(tool, deps)
+
+        assert result.name == "fetch_data"
+
+        # Execute the handler
+        output: dict[str, Any] = asyncio.run(
+            _call_handler(result, {"query": "test query"})
+        )
+
+        assert "content" in output
+        assert "Fetched: test query" in output["content"][0]["text"]
+        assert received_deps["api_url"] == "https://api.example.com"
+        assert received_deps["timeout"] == 30
+
+    def test_converts_tool_with_pydantic_model_deps(self) -> None:
+        """Tool with Pydantic model deps should convert and execute correctly."""
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        agent: Agent[_ApiConfig] = Agent("test")
+        received_config: dict[str, object] = {}
+
+        @agent.tool
+        def call_api(ctx: RunContext[_ApiConfig], endpoint: str) -> str:
+            """Call API using config."""
+            received_config["base_url"] = ctx.deps.base_url
+            received_config["api_key"] = ctx.deps.api_key
+            return f"Called: {endpoint}"
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        config = _ApiConfig(base_url="https://api.example.com", api_key="secret123")
+        result = convert_tool_with_deps(tool, config)
+
+        output: dict[str, Any] = asyncio.run(
+            _call_handler(result, {"endpoint": "/users"})
+        )
+
+        assert "Called: /users" in output["content"][0]["text"]
+        assert received_config["base_url"] == "https://api.example.com"
+        assert received_config["api_key"] == "secret123"
+
+    def test_raises_on_unsupported_deps_type(self) -> None:
+        """Unsupported deps type should raise UnsupportedDepsTypeError."""
+        from claudecode_model.exceptions import UnsupportedDepsTypeError
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        agent: Agent[httpx.AsyncClient] = Agent("test")
+
+        @agent.tool
+        def use_client(ctx: RunContext[httpx.AsyncClient], url: str) -> str:
+            """Use HTTP client."""
+            return url
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        client = httpx.AsyncClient()
+        try:
+            with pytest.raises(UnsupportedDepsTypeError):
+                convert_tool_with_deps(tool, client)
+        finally:
+            asyncio.run(client.aclose())
+
+    def test_tool_with_deps_removes_ctx_from_schema(self) -> None:
+        """Tool with deps should not include ctx in the input schema."""
+        from claudecode_model.tool_converter import convert_tool_with_deps
+
+        agent: Agent[_MyDeps] = Agent("test")
+
+        @agent.tool
+        def my_tool(ctx: RunContext[_MyDeps], name: str, count: int) -> str:
+            """Tool with ctx and args."""
+            return f"{name}: {count}"
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        deps = _MyDeps(value="test")
+        result = convert_tool_with_deps(tool, deps)
+
+        schema = _get_input_schema(result)
+        # ctx should not be in the schema
+        assert "ctx" not in schema.get("properties", {})
+        # but other args should be
+        assert "name" in schema["properties"]
+        assert "count" in schema["properties"]
