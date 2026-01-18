@@ -2,7 +2,6 @@
 
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
@@ -19,9 +18,6 @@ from pydantic_ai.models import ModelRequestParameters
 
 from claudecode_model.cli import DEFAULT_MODEL, DEFAULT_TIMEOUT_SECONDS
 from claudecode_model.model import ClaudeCodeModel
-
-if TYPE_CHECKING:
-    pass
 
 
 def create_mock_result_message(
@@ -2069,8 +2065,165 @@ class TestClaudeCodeModelSDKIntegration:
         assert result.cli_response.session_id == "test-session-123"
 
 
-# Import for type hints at module level
-from typing import TYPE_CHECKING  # noqa: E402
+class TestClaudeCodeModelIsErrorHandling:
+    """Tests for is_error flag handling in _execute_request."""
 
-if TYPE_CHECKING:
-    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
+    @pytest.mark.asyncio
+    async def test_raises_cli_execution_error_when_is_error_true(self) -> None:
+        """_execute_request should raise CLIExecutionError when is_error is True."""
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=True,
+            num_turns=1,
+            session_id="test-session",
+            result="SDK error message",
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        assert "SDK reported error" in str(exc_info.value)
+        assert exc_info.value.error_type == "invalid_response"
+        assert exc_info.value.recoverable is False
+
+    @pytest.mark.asyncio
+    async def test_is_error_with_none_result(self) -> None:
+        """_execute_request should handle is_error=True with None result."""
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=True,
+            num_turns=1,
+            session_id="test-session",
+            result=None,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        assert "Unknown error" in str(exc_info.value)
+
+
+class TestClaudeCodeModelSDKExceptionHandling:
+    """Tests for SDK exception handling in _execute_sdk_query."""
+
+    @pytest.mark.asyncio
+    async def test_sdk_exception_wrapped_in_cli_execution_error(self) -> None:
+        """_execute_sdk_query should wrap SDK exceptions in CLIExecutionError."""
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def mock_query_raises(**kwargs: object) -> AsyncIterator[object]:
+            raise RuntimeError("SDK connection failed")
+            yield  # pragma: no cover
+
+        with patch("claudecode_model.model.query", mock_query_raises):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=60.0)
+
+        assert "SDK query failed" in str(exc_info.value)
+        assert "SDK connection failed" in str(exc_info.value)
+        assert exc_info.value.error_type == "unknown"
+        assert exc_info.value.recoverable is False
+
+    @pytest.mark.asyncio
+    async def test_sdk_exception_preserves_original_exception(self) -> None:
+        """CLIExecutionError should chain the original SDK exception."""
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def mock_query_raises(**kwargs: object) -> AsyncIterator[object]:
+            raise ValueError("Invalid API key")
+            yield  # pragma: no cover
+
+        with patch("claudecode_model.model.query", mock_query_raises):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=60.0)
+
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+class TestClaudeCodeModelUsageWarning:
+    """Tests for usage data warning in _result_message_to_cli_response."""
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_usage_is_none(self, caplog: object) -> None:
+        """_result_message_to_cli_response should log warning when usage is None."""
+        import logging
+
+        model = ClaudeCodeModel()
+
+        result_no_usage = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage=None,
+        )
+
+        with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
+            cli_response = model._result_message_to_cli_response(result_no_usage)
+
+        assert "usage is None" in caplog.text  # type: ignore[attr-defined]
+        assert cli_response.usage.input_tokens == 0
+        assert cli_response.usage.output_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_usage_present(self, caplog: object) -> None:
+        """_result_message_to_cli_response should not log warning when usage exists."""
+        import logging
+
+        model = ClaudeCodeModel()
+
+        result_with_usage = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+
+        with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
+            cli_response = model._result_message_to_cli_response(result_with_usage)
+
+        assert "usage is None" not in caplog.text  # type: ignore[attr-defined]
+        assert cli_response.usage.input_tokens == 100
+        assert cli_response.usage.output_tokens == 50

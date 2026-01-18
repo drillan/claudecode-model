@@ -1,4 +1,4 @@
-"""pydantic-ai Model implementation for Claude Code CLI."""
+"""pydantic-ai Model implementation using Claude Agent SDK."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from claudecode_model.cli import (
     DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT_SECONDS,
+    TIMEOUT_EXIT_CODE,
 )
 from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.types import (
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeModel(Model):
-    """pydantic-ai Model implementation using Claude Code CLI."""
+    """pydantic-ai Model implementation using Claude Agent SDK."""
 
     def __init__(
         self,
@@ -235,9 +236,18 @@ class ClaudeCodeModel(Model):
 
         async def run_query() -> ResultMessage:
             nonlocal result_message
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, ResultMessage):
-                    result_message = message
+            try:
+                async for message in query(prompt=prompt, options=options):
+                    if isinstance(message, ResultMessage):
+                        result_message = message
+            except Exception as e:
+                raise CLIExecutionError(
+                    f"SDK query failed: {e}",
+                    exit_code=None,
+                    stderr=str(e),
+                    error_type="unknown",
+                    recoverable=False,
+                ) from e
             if result_message is None:
                 raise CLIExecutionError(
                     "No ResultMessage received from SDK",
@@ -255,7 +265,7 @@ class ClaudeCodeModel(Model):
         if cancel_scope.cancelled_caught:
             raise CLIExecutionError(
                 f"SDK query timed out after {timeout} seconds",
-                exit_code=-9,
+                exit_code=TIMEOUT_EXIT_CODE,
                 stderr="Query was cancelled due to timeout",
                 error_type="timeout",
                 recoverable=True,
@@ -279,7 +289,12 @@ class ClaudeCodeModel(Model):
         Returns:
             CLIResponse with equivalent data.
         """
-        usage_data = result.usage or {}
+        usage_data = result.usage
+        if usage_data is None:
+            logger.warning(
+                "ResultMessage.usage is None, using default values of 0 for all usage fields"
+            )
+            usage_data = {}
 
         return CLIResponse(
             type="result",
@@ -417,6 +432,16 @@ class ClaudeCodeModel(Model):
         # Execute SDK query
         result = await self._execute_sdk_query(user_prompt, options, timeout)
 
+        # Check for error response from SDK
+        if result.is_error:
+            raise CLIExecutionError(
+                f"SDK reported error: {result.result or 'Unknown error'}",
+                exit_code=None,
+                stderr=result.result or "",
+                error_type="invalid_response",
+                recoverable=False,
+            )
+
         # Convert to CLIResponse for backward compatibility
         return self._result_message_to_cli_response(result)
 
@@ -426,7 +451,7 @@ class ClaudeCodeModel(Model):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        """Make a request to Claude Code CLI.
+        """Make a request to Claude Agent SDK.
 
         Args:
             messages: The conversation messages.
@@ -434,13 +459,11 @@ class ClaudeCodeModel(Model):
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
-            ModelResponse containing the CLI response.
+            ModelResponse containing the SDK response.
 
         Raises:
             ValueError: If no user prompt is found in messages.
-            CLINotFoundError: If the claude CLI is not found.
-            CLIExecutionError: If CLI execution fails.
-            CLIResponseParseError: If CLI output cannot be parsed.
+            CLIExecutionError: If SDK execution fails or times out.
         """
         json_schema = self._extract_json_schema(model_request_parameters)
         cli_response = await self._execute_request(
@@ -454,9 +477,9 @@ class ClaudeCodeModel(Model):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> RequestWithMetadataResult:
-        """Make a request to Claude Code CLI and return both response and metadata.
+        """Make a request to Claude Agent SDK and return both response and metadata.
 
-        This method is useful when you need access to CLI metadata such as
+        This method is useful when you need access to SDK metadata such as
         total_cost_usd, duration_api_ms, num_turns, etc., which are lost
         during the to_model_response() conversion.
 
@@ -472,9 +495,7 @@ class ClaudeCodeModel(Model):
 
         Raises:
             ValueError: If no user prompt is found in messages.
-            CLINotFoundError: If the claude CLI is not found.
-            CLIExecutionError: If CLI execution fails.
-            CLIResponseParseError: If CLI output cannot be parsed.
+            CLIExecutionError: If SDK execution fails or times out.
 
         Example:
             ```python

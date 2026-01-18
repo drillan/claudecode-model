@@ -26,6 +26,7 @@ DEFAULT_MODEL = "claude-sonnet-4-5"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_PROMPT_LENGTH = 1_000_000  # 1MB limit
 DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA = 3
+TIMEOUT_EXIT_CODE = -9  # Exit code for timeout signal (SIGKILL)
 
 
 class ClaudeCodeCLI:
