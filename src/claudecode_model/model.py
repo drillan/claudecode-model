@@ -130,10 +130,19 @@ class ClaudeCodeModel(Model):
             model_request_parameters: Request parameters for tools and output.
 
         Returns:
-            JSON schema dict if output_mode is 'native' and output_object is set,
+            JSON schema dict if effective output_mode is 'native' and output_object is set,
             None otherwise.
+
+        Note:
+            When output_mode is 'auto', resolves to profile.default_structured_output_mode.
         """
-        if model_request_parameters.output_mode == "native":
+        output_mode = model_request_parameters.output_mode
+
+        # Resolve 'auto' mode using profile's default
+        if output_mode == "auto":
+            output_mode = self.profile.default_structured_output_mode
+
+        if output_mode == "native":
             if model_request_parameters.output_object is not None:
                 return model_request_parameters.output_object.json_schema
         return None
