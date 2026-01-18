@@ -106,6 +106,23 @@ class ClaudeCodeModel(Model):
 
         return "\n".join(parts)
 
+    def _extract_json_schema(
+        self, model_request_parameters: ModelRequestParameters
+    ) -> dict[str, JsonValue] | None:
+        """Extract JSON schema from model request parameters.
+
+        Args:
+            model_request_parameters: Request parameters for tools and output.
+
+        Returns:
+            JSON schema dict if output_mode is 'native' and output_object is set,
+            None otherwise.
+        """
+        if model_request_parameters.output_mode == "native":
+            if model_request_parameters.output_object is not None:
+                return model_request_parameters.output_object.json_schema
+        return None
+
     async def _execute_request(
         self,
         messages: list[ModelMessage],
@@ -243,12 +260,7 @@ class ClaudeCodeModel(Model):
             CLIExecutionError: If CLI execution fails.
             CLIResponseParseError: If CLI output cannot be parsed.
         """
-        # Extract json_schema from output_object when output_mode is 'native'
-        json_schema: dict[str, JsonValue] | None = None
-        if model_request_parameters.output_mode == "native":
-            if model_request_parameters.output_object is not None:
-                json_schema = model_request_parameters.output_object.json_schema
-
+        json_schema = self._extract_json_schema(model_request_parameters)
         cli_response = await self._execute_request(
             messages, model_settings, json_schema=json_schema
         )
@@ -293,12 +305,7 @@ class ClaudeCodeModel(Model):
             }
             ```
         """
-        # Extract json_schema from output_object when output_mode is 'native'
-        json_schema: dict[str, JsonValue] | None = None
-        if model_request_parameters.output_mode == "native":
-            if model_request_parameters.output_object is not None:
-                json_schema = model_request_parameters.output_object.json_schema
-
+        json_schema = self._extract_json_schema(model_request_parameters)
         cli_response = await self._execute_request(
             messages, model_settings, json_schema=json_schema
         )

@@ -24,9 +24,10 @@ def extract_json(text: str) -> dict[str, JsonValue]:
         Parsed JSON as dictionary. Arrays are wrapped in {"value": ...}
 
     Raises:
-        ValueError: If no valid JSON found
+        ValueError: If no valid JSON found, with details of each strategy's failure
     """
     text_stripped = text.strip()
+    failures: list[str] = []
 
     # Strategy 1: Direct JSON parse
     try:
@@ -34,8 +35,8 @@ def extract_json(text: str) -> dict[str, JsonValue]:
         if isinstance(result, dict):
             return result
         return {"value": result}  # Wrap non-dict in dict
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        failures.append(f"direct parse: {e}")
 
     # Strategy 2: Extract from ```json ... ``` blocks
     match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
@@ -45,36 +46,52 @@ def extract_json(text: str) -> dict[str, JsonValue]:
             if isinstance(result, dict):
                 return result
             return {"value": result}
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            failures.append(f"code block: {e}")
+    else:
+        failures.append("code block: no ```json``` block found")
 
     # Strategy 3: Find JSON object pattern (greedy, handles nested)
     # Use bracket counting approach
-    obj_result = _find_json_object(text)
+    obj_result = _find_json_object(text, failures)
     if obj_result is not None:
         return obj_result
 
     # Strategy 4: Find JSON array pattern
-    arr_result = _find_json_array(text)
+    arr_result = _find_json_array(text, failures)
     if arr_result is not None:
         return {"value": arr_result}
 
     # Truncate text for error message
     preview = text[:200] + "..." if len(text) > 200 else text
-    raise ValueError(f"No valid JSON found in output: {preview}")
+    failure_details = "; ".join(failures)
+    raise ValueError(
+        f"No valid JSON found in output. Strategies tried: [{failure_details}]. "
+        f"Text preview: {preview}"
+    )
 
 
-def _find_json_object(text: str) -> dict[str, JsonValue] | None:
+def _find_json_object(
+    text: str, failures: list[str] | None = None
+) -> dict[str, JsonValue] | None:
     """Find and parse the first JSON object {...} in text.
+
+    Uses bracket counting to handle nested objects and tracks string context
+    to correctly handle braces inside strings.
 
     Args:
         text: Text to search
+        failures: Optional list to append failure reasons to
 
     Returns:
         Parsed JSON dict or None if not found
     """
+    found_brace = False
+    last_error: str | None = None
+
     for i, char in enumerate(text):
         if char == "{":
+            found_brace = True
             depth = 1
             in_string = False
             escape_next = False
@@ -104,25 +121,45 @@ def _find_json_object(text: str) -> dict[str, JsonValue] | None:
                     if depth == 0:
                         try:
                             return json.loads(text[i : j + 1])
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            last_error = str(e)
                             # Continue searching for next object
                             break
             # If we get here without returning, this { didn't lead to valid JSON
             # Continue to find next {
+
+    if failures is not None:
+        if not found_brace:
+            failures.append("object pattern: no '{' found")
+        elif last_error:
+            failures.append(f"object pattern: {last_error}")
+        else:
+            failures.append("object pattern: unclosed or invalid structure")
+
     return None
 
 
-def _find_json_array(text: str) -> list[JsonValue] | None:
+def _find_json_array(
+    text: str, failures: list[str] | None = None
+) -> list[JsonValue] | None:
     """Find and parse the first JSON array [...] in text.
+
+    Uses bracket counting to handle nested arrays and tracks string context
+    to correctly handle brackets inside strings.
 
     Args:
         text: Text to search
+        failures: Optional list to append failure reasons to
 
     Returns:
         Parsed JSON list or None if not found
     """
+    found_bracket = False
+    last_error: str | None = None
+
     for i, char in enumerate(text):
         if char == "[":
+            found_bracket = True
             depth = 1
             in_string = False
             escape_next = False
@@ -152,9 +189,19 @@ def _find_json_array(text: str) -> list[JsonValue] | None:
                     if depth == 0:
                         try:
                             return json.loads(text[i : j + 1])
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            last_error = str(e)
                             # Continue searching for next array
                             break
             # If we get here without returning, this [ didn't lead to valid JSON
             # Continue to find next [
+
+    if failures is not None:
+        if not found_bracket:
+            failures.append("array pattern: no '[' found")
+        elif last_error:
+            failures.append(f"array pattern: {last_error}")
+        else:
+            failures.append("array pattern: unclosed or invalid structure")
+
     return None

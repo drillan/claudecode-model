@@ -10,6 +10,8 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
+from claudecode_model.exceptions import CLIResponseParseError
+
 # JSON互換の再帰型（Any型を避ける）
 type JsonValue = (
     int | float | str | bool | None | list[JsonValue] | dict[str, JsonValue]
@@ -196,10 +198,19 @@ class CLIResponse(BaseModel):
 
         If structured_output is present, returns its JSON serialization.
         Otherwise returns the text result.
+
+        Raises:
+            CLIResponseParseError: If structured_output cannot be serialized to JSON.
         """
         # Use structured_output if available, otherwise use result
         if self.structured_output is not None:
-            content = json.dumps(self.structured_output, ensure_ascii=False)
+            try:
+                content = json.dumps(self.structured_output, ensure_ascii=False)
+            except (TypeError, ValueError) as e:
+                raise CLIResponseParseError(
+                    f"Failed to serialize structured_output to JSON: {e}",
+                    raw_output=str(self.structured_output),
+                ) from e
         else:
             content = self.result
 
