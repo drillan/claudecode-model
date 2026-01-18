@@ -20,6 +20,10 @@ from claudecode_model.response_converter import (
     convert_usage_dict_to_cli_usage,
     extract_text_from_assistant_message,
 )
+from claudecode_model.tool_converter import (
+    convert_tool,
+    convert_tools_to_mcp_server,
+)
 from claudecode_model.types import (
     CacheCreation,
     CLIResponse,
@@ -56,6 +60,8 @@ __all__ = [
     "convert_sdk_messages_to_cli_response",
     "convert_usage_dict_to_cli_usage",
     "extract_text_from_assistant_message",
+    "convert_tool",
+    "convert_tools_to_mcp_server",
 ]
 
 
