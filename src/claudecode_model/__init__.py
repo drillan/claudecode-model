@@ -6,12 +6,20 @@ from claudecode_model.cli import (
     MAX_PROMPT_LENGTH,
     ClaudeCodeCLI,
 )
+from claudecode_model.deps_support import (
+    DepsContext,
+    create_deps_context,
+    deserialize_deps,
+    is_serializable_type,
+    serialize_deps,
+)
 from claudecode_model.exceptions import (
     CLIExecutionError,
     CLINotFoundError,
     CLIResponseParseError,
     ClaudeCodeError,
     ErrorType,
+    UnsupportedDepsTypeError,
 )
 from claudecode_model.json_utils import extract_json
 from claudecode_model.model import ClaudeCodeModel
@@ -26,6 +34,7 @@ from claudecode_model.tool_converter import (
     McpServerConfig,
     McpTextContent,
     convert_tool,
+    convert_tool_with_deps,
     convert_tools_to_mcp_server,
 )
 from claudecode_model.types import (
@@ -52,6 +61,7 @@ __all__ = [
     "CLINotFoundError",
     "CLIExecutionError",
     "CLIResponseParseError",
+    "UnsupportedDepsTypeError",
     "ErrorType",
     "RequestWithMetadataResult",
     "DEFAULT_MODEL",
@@ -65,11 +75,18 @@ __all__ = [
     "convert_usage_dict_to_cli_usage",
     "extract_text_from_assistant_message",
     "convert_tool",
+    "convert_tool_with_deps",
     "convert_tools_to_mcp_server",
     "JsonSchema",
     "McpResponse",
     "McpServerConfig",
     "McpTextContent",
+    # Serializable deps support (experimental)
+    "DepsContext",
+    "create_deps_context",
+    "is_serializable_type",
+    "serialize_deps",
+    "deserialize_deps",
 ]
 
 

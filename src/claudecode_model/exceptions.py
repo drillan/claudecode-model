@@ -59,3 +59,23 @@ class CLIResponseParseError(ClaudeCodeError):
     def __init__(self, message: str, *, raw_output: str = "") -> None:
         super().__init__(message)
         self.raw_output = raw_output
+
+
+class UnsupportedDepsTypeError(ClaudeCodeError):
+    """Raised when a dependency type is not serializable.
+
+    This error is raised when attempting to serialize a dependency type
+    that is not supported (e.g., httpx.AsyncClient, database connections).
+
+    Attributes:
+        type_name: Name of the unsupported type for programmatic access.
+    """
+
+    def __init__(self, type_name: str) -> None:
+        message = (
+            f"Unsupported dependency type: {type_name}. "
+            "Only serializable types are supported: "
+            "dict, list, str, int, float, bool, None, dataclass, and Pydantic BaseModel."
+        )
+        super().__init__(message)
+        self.type_name = type_name
