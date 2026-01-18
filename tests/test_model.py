@@ -1,9 +1,11 @@
 """Tests for claudecode_model.model module."""
 
 import logging
-from unittest.mock import AsyncMock, patch
+from collections.abc import AsyncIterator
+from unittest.mock import patch
 
 import pytest
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -16,7 +18,39 @@ from pydantic_ai.models import ModelRequestParameters
 
 from claudecode_model.cli import DEFAULT_MODEL, DEFAULT_TIMEOUT_SECONDS
 from claudecode_model.model import ClaudeCodeModel
-from claudecode_model.types import CLIResponse, CLIUsage
+
+
+def create_mock_result_message(
+    result: str = "Response from Claude",
+    is_error: bool = False,
+    subtype: str = "success",
+    duration_ms: int = 1000,
+    duration_api_ms: int = 800,
+    num_turns: int = 1,
+    session_id: str = "test-session",
+    total_cost_usd: float | None = None,
+    usage: dict[str, int] | None = None,
+    structured_output: dict[str, object] | None = None,
+) -> ResultMessage:
+    """Create a mock ResultMessage for testing."""
+    return ResultMessage(
+        subtype=subtype,
+        duration_ms=duration_ms,
+        duration_api_ms=duration_api_ms,
+        is_error=is_error,
+        num_turns=num_turns,
+        session_id=session_id,
+        result=result,
+        total_cost_usd=total_cost_usd,
+        usage=usage
+        or {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+        structured_output=structured_output,
+    )
 
 
 class TestClaudeCodeModelInit:
@@ -205,26 +239,12 @@ class TestClaudeCodeModelRequest:
     """Tests for ClaudeCodeModel.request method."""
 
     @pytest.fixture
-    def mock_cli_response(self) -> CLIResponse:
-        """Return a mock CLI response."""
-        return CLIResponse(
-            type="result",
-            subtype="success",
-            is_error=False,
-            duration_ms=1000,
-            duration_api_ms=800,
-            num_turns=1,
-            result="Response from Claude",
-            usage=CLIUsage(
-                input_tokens=100,
-                output_tokens=50,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            ),
-        )
+    def mock_result_message(self) -> ResultMessage:
+        """Return a mock ResultMessage."""
+        return create_mock_result_message()
 
     @pytest.mark.asyncio
-    async def test_successful_request(self, mock_cli_response: CLIResponse) -> None:
+    async def test_successful_request(self, mock_result_message: ResultMessage) -> None:
         """request should return ModelResponse on success."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -235,13 +255,10 @@ class TestClaudeCodeModelRequest:
             allow_text_output=True,
         )
 
-        with (
-            patch.object(ClaudeCodeModel, "_extract_user_prompt", return_value="Hello"),
-            patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class,
-        ):
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message
 
+        with patch("claudecode_model.model.query", mock_query):
             response = await model.request(messages, None, params)
 
             assert isinstance(response, ModelResponse)
@@ -251,9 +268,9 @@ class TestClaudeCodeModelRequest:
 
     @pytest.mark.asyncio
     async def test_passes_system_prompt_to_cli(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
-        """request should pass system prompt to CLI."""
+        """request should pass system prompt to SDK options."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(
@@ -268,21 +285,25 @@ class TestClaudeCodeModelRequest:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            mock_cli_class.assert_called_once()
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["system_prompt"] == "Be helpful"
+            assert len(captured_options) == 1
+            assert captured_options[0].system_prompt == "Be helpful"
 
     @pytest.mark.asyncio
     async def test_uses_timeout_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
-        """request should use timeout from model_settings if provided."""
+        """request should use timeout from model_settings for SDK query."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -293,20 +314,26 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"timeout": 60.0}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        # Capture the timeout used by mocking _execute_sdk_query
+        captured_timeouts: list[float] = []
 
+        async def mock_execute_sdk_query(
+            prompt: str, options: ClaudeAgentOptions, timeout: float
+        ) -> ResultMessage:
+            captured_timeouts.append(timeout)
+            return mock_result_message
+
+        with patch.object(model, "_execute_sdk_query", mock_execute_sdk_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["timeout"] == 60.0
+            assert len(captured_timeouts) == 1
+            assert captured_timeouts[0] == 60.0
 
     @pytest.mark.asyncio
     async def test_creates_new_cli_per_request(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
-        """request should create new CLI instance per request (no race condition)."""
+        """request should call SDK query for each request."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -316,16 +343,20 @@ class TestClaudeCodeModelRequest:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        query_call_count = 0
 
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            nonlocal query_call_count
+            query_call_count += 1
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             # Make two requests
             await model.request(messages, None, params)
             await model.request(messages, None, params)
 
-            # Should have created two CLI instances
-            assert mock_cli_class.call_count == 2
+            # Should have called query twice
+            assert query_call_count == 2
 
     @pytest.mark.asyncio
     async def test_raises_on_empty_prompt(self) -> None:
@@ -344,7 +375,7 @@ class TestClaudeCodeModelRequest:
 
     @pytest.mark.asyncio
     async def test_uses_max_budget_usd_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use max_budget_usd from model_settings if provided."""
         model = ClaudeCodeModel()
@@ -357,18 +388,23 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_budget_usd": 1.5}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_budget_usd"] == 1.5
+            assert len(captured_options) == 1
+            assert captured_options[0].max_budget_usd == 1.5
 
     @pytest.mark.asyncio
     async def test_uses_append_system_prompt_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use append_system_prompt from model_settings if provided."""
         model = ClaudeCodeModel()
@@ -381,18 +417,23 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"append_system_prompt": "Be concise."}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["append_system_prompt"] == "Be concise."
+            assert len(captured_options) == 1
+            assert captured_options[0].system_prompt == "Be concise."
 
     @pytest.mark.asyncio
     async def test_uses_all_new_options_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use all new options from model_settings if provided."""
         model = ClaudeCodeModel()
@@ -409,20 +450,27 @@ class TestClaudeCodeModelRequest:
             "append_system_prompt": "Keep it brief.",
         }
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
+        captured_timeouts: list[float] = []
 
+        async def mock_execute_sdk_query(
+            prompt: str, options: ClaudeAgentOptions, timeout: float
+        ) -> ResultMessage:
+            captured_options.append(options)
+            captured_timeouts.append(timeout)
+            return mock_result_message
+
+        with patch.object(model, "_execute_sdk_query", mock_execute_sdk_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["timeout"] == 60.0
-            assert call_kwargs["max_budget_usd"] == 2.0
-            assert call_kwargs["append_system_prompt"] == "Keep it brief."
+            assert len(captured_options) == 1
+            assert captured_timeouts[0] == 60.0
+            assert captured_options[0].max_budget_usd == 2.0
+            assert captured_options[0].system_prompt == "Keep it brief."
 
     @pytest.mark.asyncio
     async def test_rejects_negative_max_budget_usd_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should raise ValueError for negative max_budget_usd."""
         model = ClaudeCodeModel()
@@ -440,7 +488,7 @@ class TestClaudeCodeModelRequest:
 
     @pytest.mark.asyncio
     async def test_converts_integer_max_budget_usd_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should convert integer max_budget_usd to float."""
         model = ClaudeCodeModel()
@@ -453,18 +501,23 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_budget_usd": 5}  # integer
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_budget_usd"] == 5.0
+            assert len(captured_options) == 1
+            assert captured_options[0].max_budget_usd == 5.0
 
     @pytest.mark.asyncio
     async def test_accepts_empty_string_append_system_prompt_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should accept empty string append_system_prompt."""
         model = ClaudeCodeModel()
@@ -477,18 +530,24 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"append_system_prompt": ""}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["append_system_prompt"] == ""
+            assert len(captured_options) == 1
+            # Empty string append_system_prompt should result in None system_prompt
+            assert captured_options[0].system_prompt is None
 
     @pytest.mark.asyncio
     async def test_warns_on_invalid_type_max_budget_usd(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+        self, mock_result_message: ResultMessage, caplog: pytest.LogCaptureFixture
     ) -> None:
         """request should warn when max_budget_usd has invalid type."""
         model = ClaudeCodeModel()
@@ -501,21 +560,26 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_budget_usd": "1.5"}  # string instead of float
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             with caplog.at_level(logging.WARNING):
                 await model.request(messages, settings, params)  # type: ignore[arg-type]
 
             assert "max_budget_usd" in caplog.text
             assert "expected int or float" in caplog.text
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_budget_usd"] is None
+            assert len(captured_options) == 1
+            assert captured_options[0].max_budget_usd is None
 
     @pytest.mark.asyncio
     async def test_warns_on_invalid_type_timeout(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+        self, mock_result_message: ResultMessage, caplog: pytest.LogCaptureFixture
     ) -> None:
         """request should warn when timeout has invalid type."""
         model = ClaudeCodeModel()
@@ -528,10 +592,10 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"timeout": "60"}  # string instead of float
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message
 
+        with patch("claudecode_model.model.query", mock_query):
             with caplog.at_level(logging.WARNING):
                 await model.request(messages, settings, params)  # type: ignore[arg-type]
 
@@ -540,7 +604,7 @@ class TestClaudeCodeModelRequest:
 
     @pytest.mark.asyncio
     async def test_warns_on_invalid_type_append_system_prompt(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+        self, mock_result_message: ResultMessage, caplog: pytest.LogCaptureFixture
     ) -> None:
         """request should warn when append_system_prompt has invalid type."""
         model = ClaudeCodeModel()
@@ -553,21 +617,27 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"append_system_prompt": 123}  # int instead of string
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             with caplog.at_level(logging.WARNING):
                 await model.request(messages, settings, params)  # type: ignore[arg-type]
 
             assert "append_system_prompt" in caplog.text
             assert "expected str" in caplog.text
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["append_system_prompt"] is None
+            assert len(captured_options) == 1
+            # Invalid append_system_prompt should be ignored
+            assert captured_options[0].system_prompt is None
 
     @pytest.mark.asyncio
     async def test_uses_max_turns_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use max_turns from model_settings if provided."""
         model = ClaudeCodeModel()
@@ -580,18 +650,23 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_turns": 5}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_turns"] == 5
+            assert len(captured_options) == 1
+            assert captured_options[0].max_turns == 5
 
     @pytest.mark.asyncio
     async def test_rejects_non_positive_max_turns_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should raise ValueError for non-positive max_turns."""
         model = ClaudeCodeModel()
@@ -609,7 +684,7 @@ class TestClaudeCodeModelRequest:
 
     @pytest.mark.asyncio
     async def test_warns_on_invalid_type_max_turns(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+        self, mock_result_message: ResultMessage, caplog: pytest.LogCaptureFixture
     ) -> None:
         """request should warn when max_turns has invalid type."""
         model = ClaudeCodeModel()
@@ -622,21 +697,26 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_turns": "5"}  # string instead of int
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             with caplog.at_level(logging.WARNING):
                 await model.request(messages, settings, params)  # type: ignore[arg-type]
 
             assert "max_turns" in caplog.text
             assert "expected int" in caplog.text
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_turns"] is None
+            assert len(captured_options) == 1
+            assert captured_options[0].max_turns is None
 
     @pytest.mark.asyncio
     async def test_uses_max_turns_from_init(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use max_turns from __init__ when model_settings not provided."""
         model = ClaudeCodeModel(max_turns=3)
@@ -648,18 +728,23 @@ class TestClaudeCodeModelRequest:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_turns"] == 3
+            assert len(captured_options) == 1
+            assert captured_options[0].max_turns == 3
 
     @pytest.mark.asyncio
     async def test_model_settings_max_turns_overrides_init(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should prefer max_turns from model_settings over __init__."""
         model = ClaudeCodeModel(max_turns=3)
@@ -672,43 +757,46 @@ class TestClaudeCodeModelRequest:
         )
         settings = {"max_turns": 10}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["max_turns"] == 10
+            assert len(captured_options) == 1
+            assert captured_options[0].max_turns == 10
 
 
 class TestClaudeCodeModelRequestWithMetadata:
     """Tests for ClaudeCodeModel.request_with_metadata method."""
 
     @pytest.fixture
-    def mock_cli_response(self) -> CLIResponse:
-        """Return a mock CLI response with full metadata."""
-        return CLIResponse(
-            type="result",
+    def mock_result_message(self) -> ResultMessage:
+        """Return a mock ResultMessage with full metadata."""
+        return create_mock_result_message(
+            result="Response with metadata",
             subtype="success",
-            is_error=False,
             duration_ms=1500,
             duration_api_ms=1200,
             num_turns=3,
-            result="Response with metadata",
             session_id="test-session-123",
             total_cost_usd=0.05,
-            usage=CLIUsage(
-                input_tokens=200,
-                output_tokens=100,
-                cache_creation_input_tokens=50,
-                cache_read_input_tokens=25,
-            ),
+            usage={
+                "input_tokens": 200,
+                "output_tokens": 100,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 25,
+            },
         )
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_returns_named_tuple(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request_with_metadata should return RequestWithMetadataResult NamedTuple."""
         from claudecode_model.types import RequestWithMetadataResult
@@ -722,10 +810,12 @@ class TestClaudeCodeModelRequestWithMetadata:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message
 
+        with patch("claudecode_model.model.query", mock_query):
             result = await model.request_with_metadata(messages, None, params)
 
             assert isinstance(result, RequestWithMetadataResult)
@@ -734,7 +824,7 @@ class TestClaudeCodeModelRequestWithMetadata:
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_response_matches_request(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request_with_metadata response should match regular request output."""
         model = ClaudeCodeModel()
@@ -746,10 +836,12 @@ class TestClaudeCodeModelRequestWithMetadata:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message
 
+        with patch("claudecode_model.model.query", mock_query):
             result = await model.request_with_metadata(messages, None, params)
 
             assert isinstance(result.response, ModelResponse)
@@ -760,7 +852,7 @@ class TestClaudeCodeModelRequestWithMetadata:
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_preserves_all_cli_fields(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request_with_metadata should preserve all CLI metadata fields."""
         model = ClaudeCodeModel()
@@ -772,10 +864,12 @@ class TestClaudeCodeModelRequestWithMetadata:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message
 
+        with patch("claudecode_model.model.query", mock_query):
             result = await model.request_with_metadata(messages, None, params)
 
             # Verify all metadata fields are preserved
@@ -795,9 +889,9 @@ class TestClaudeCodeModelRequestWithMetadata:
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_with_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
-        """request_with_metadata should pass model_settings to CLI."""
+        """request_with_metadata should pass model_settings to SDK options."""
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -812,16 +906,20 @@ class TestClaudeCodeModelRequestWithMetadata:
             "max_turns": 5,
         }
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request_with_metadata(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["timeout"] == 120.0
-            assert call_kwargs["max_budget_usd"] == 1.0
-            assert call_kwargs["max_turns"] == 5
+            assert len(captured_options) == 1
+            assert captured_options[0].max_budget_usd == 1.0
+            assert captured_options[0].max_turns == 5
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_raises_on_error(self) -> None:
@@ -843,27 +941,13 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
     """Tests for working_directory override via model_settings."""
 
     @pytest.fixture
-    def mock_cli_response(self) -> CLIResponse:
-        """Return a mock CLI response."""
-        return CLIResponse(
-            type="result",
-            subtype="success",
-            is_error=False,
-            duration_ms=1000,
-            duration_api_ms=800,
-            num_turns=1,
-            result="Response from Claude",
-            usage=CLIUsage(
-                input_tokens=100,
-                output_tokens=50,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            ),
-        )
+    def mock_result_message(self) -> ResultMessage:
+        """Return a mock ResultMessage."""
+        return create_mock_result_message()
 
     @pytest.mark.asyncio
     async def test_uses_working_directory_from_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use working_directory from model_settings if provided."""
         model = ClaudeCodeModel()
@@ -876,18 +960,23 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
         )
         settings = {"working_directory": "/custom/path"}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == "/custom/path"
+            assert len(captured_options) == 1
+            assert captured_options[0].cwd == "/custom/path"
 
     @pytest.mark.asyncio
     async def test_model_settings_working_directory_overrides_init(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should prefer working_directory from model_settings over __init__."""
         model = ClaudeCodeModel(working_directory="/init/path")
@@ -900,18 +989,23 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
         )
         settings = {"working_directory": "/override/path"}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == "/override/path"
+            assert len(captured_options) == 1
+            assert captured_options[0].cwd == "/override/path"
 
     @pytest.mark.asyncio
     async def test_uses_init_working_directory_when_not_in_model_settings(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use working_directory from __init__ when not in model_settings."""
         model = ClaudeCodeModel(working_directory="/init/path")
@@ -923,19 +1017,22 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == "/init/path"
+            assert len(captured_options) == 1
+            assert captured_options[0].cwd == "/init/path"
 
     @pytest.mark.asyncio
-    async def test_raises_on_invalid_type_working_directory(
-        self, mock_cli_response: CLIResponse
-    ) -> None:
+    async def test_raises_on_invalid_type_working_directory(self) -> None:
         """request should raise TypeError when working_directory has invalid type."""
         model = ClaudeCodeModel(working_directory="/init/path")
         messages: list[ModelMessage] = [
@@ -952,7 +1049,7 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
 
     @pytest.mark.asyncio
     async def test_working_directory_none_in_model_settings_uses_init(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should use init value when model_settings working_directory is None."""
         model = ClaudeCodeModel(working_directory="/init/path")
@@ -965,18 +1062,23 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
         )
         settings = {"working_directory": None}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == "/init/path"
+            assert len(captured_options) == 1
+            assert captured_options[0].cwd == "/init/path"
 
     @pytest.mark.asyncio
     async def test_warns_on_empty_string_working_directory(
-        self, mock_cli_response: CLIResponse, caplog: pytest.LogCaptureFixture
+        self, mock_result_message: ResultMessage, caplog: pytest.LogCaptureFixture
     ) -> None:
         """request should warn when working_directory is empty string."""
         model = ClaudeCodeModel()
@@ -989,64 +1091,43 @@ class TestClaudeCodeModelWorkingDirectoryOverride:
         )
         settings = {"working_directory": ""}
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             with caplog.at_level(logging.WARNING):
                 await model.request(messages, settings, params)  # type: ignore[arg-type]
 
             assert "working_directory" in caplog.text
             assert "empty string" in caplog.text
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs["working_directory"] == ""
+            assert len(captured_options) == 1
+            assert captured_options[0].cwd == ""
 
 
 class TestClaudeCodeModelStructuredOutput:
     """Tests for ClaudeCodeModel structured output (output_type) support."""
 
     @pytest.fixture
-    def mock_cli_response(self) -> CLIResponse:
-        """Return a mock CLI response."""
-        return CLIResponse(
-            type="result",
-            subtype="success",
-            is_error=False,
-            duration_ms=1000,
-            duration_api_ms=800,
-            num_turns=1,
-            result="Response from Claude",
-            usage=CLIUsage(
-                input_tokens=100,
-                output_tokens=50,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            ),
-        )
+    def mock_result_message(self) -> ResultMessage:
+        """Return a mock ResultMessage."""
+        return create_mock_result_message()
 
     @pytest.fixture
-    def mock_cli_response_with_structured_output(self) -> CLIResponse:
-        """Return a mock CLI response with structured_output."""
-        return CLIResponse(
-            type="result",
-            subtype="success",
-            is_error=False,
-            duration_ms=1000,
-            duration_api_ms=800,
-            num_turns=1,
+    def mock_result_message_with_structured_output(self) -> ResultMessage:
+        """Return a mock ResultMessage with structured_output."""
+        return create_mock_result_message(
             result="Generated output",
-            usage=CLIUsage(
-                input_tokens=100,
-                output_tokens=50,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            ),
             structured_output={"name": "test", "score": 95},
         )
 
     @pytest.mark.asyncio
     async def test_request_without_output_mode_does_not_pass_json_schema(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should not pass json_schema when output_mode is not native."""
         model = ClaudeCodeModel()
@@ -1058,18 +1139,23 @@ class TestClaudeCodeModelStructuredOutput:
             allow_text_output=True,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs.get("json_schema") is None
+            assert len(captured_options) == 1
+            assert captured_options[0].output_format is None
 
     @pytest.mark.asyncio
     async def test_request_with_native_output_mode_passes_json_schema(
-        self, mock_cli_response_with_structured_output: CLIResponse
+        self, mock_result_message_with_structured_output: ResultMessage
     ) -> None:
         """request should pass json_schema when output_mode is native."""
         from pydantic_ai.models import OutputObjectDefinition
@@ -1100,20 +1186,26 @@ class TestClaudeCodeModelStructuredOutput:
             ),
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(
-                return_value=mock_cli_response_with_structured_output
-            )
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message_with_structured_output
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs.get("json_schema") == json_schema
+            assert len(captured_options) == 1
+            assert captured_options[0].output_format == {
+                "type": "json_schema",
+                "schema": json_schema,
+            }
 
     @pytest.mark.asyncio
     async def test_request_with_native_output_mode_without_output_object(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should not pass json_schema when output_mode is native but no output_object."""
         model = ClaudeCodeModel()
@@ -1128,18 +1220,23 @@ class TestClaudeCodeModelStructuredOutput:
             output_object=None,
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs.get("json_schema") is None
+            assert len(captured_options) == 1
+            assert captured_options[0].output_format is None
 
     @pytest.mark.asyncio
     async def test_request_with_tool_output_mode_does_not_pass_json_schema(
-        self, mock_cli_response: CLIResponse
+        self, mock_result_message: ResultMessage
     ) -> None:
         """request should not pass json_schema when output_mode is tool."""
         from pydantic_ai.models import OutputObjectDefinition
@@ -1163,19 +1260,24 @@ class TestClaudeCodeModelStructuredOutput:
             ),
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(return_value=mock_cli_response)
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            call_kwargs = mock_cli_class.call_args.kwargs
             # Should NOT pass json_schema for tool mode
-            assert call_kwargs.get("json_schema") is None
+            assert len(captured_options) == 1
+            assert captured_options[0].output_format is None
 
     @pytest.mark.asyncio
     async def test_request_with_structured_output_returns_json_in_response(
-        self, mock_cli_response_with_structured_output: CLIResponse
+        self, mock_result_message_with_structured_output: ResultMessage
     ) -> None:
         """request should return JSON string in response when structured_output present."""
         from pydantic_ai.models import OutputObjectDefinition
@@ -1206,12 +1308,12 @@ class TestClaudeCodeModelStructuredOutput:
             ),
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(
-                return_value=mock_cli_response_with_structured_output
-            )
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message_with_structured_output
 
+        with patch("claudecode_model.model.query", mock_query):
             response = await model.request(messages, None, params)
 
             # The response content should be JSON string
@@ -1221,7 +1323,7 @@ class TestClaudeCodeModelStructuredOutput:
 
     @pytest.mark.asyncio
     async def test_request_with_metadata_preserves_structured_output(
-        self, mock_cli_response_with_structured_output: CLIResponse
+        self, mock_result_message_with_structured_output: ResultMessage
     ) -> None:
         """request_with_metadata should preserve structured_output in cli_response."""
         from pydantic_ai.models import OutputObjectDefinition
@@ -1248,12 +1350,12 @@ class TestClaudeCodeModelStructuredOutput:
             ),
         )
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(
-                return_value=mock_cli_response_with_structured_output
-            )
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result_message_with_structured_output
 
+        with patch("claudecode_model.model.query", mock_query):
             result = await model.request_with_metadata(messages, None, params)
 
             assert result.cli_response.structured_output is not None
@@ -1262,7 +1364,7 @@ class TestClaudeCodeModelStructuredOutput:
 
     @pytest.mark.asyncio
     async def test_agent_with_output_type_auto_generates_json_schema(
-        self, mock_cli_response_with_structured_output: CLIResponse
+        self, mock_result_message_with_structured_output: ResultMessage
     ) -> None:
         """Agent with output_type should automatically use --json-schema.
 
@@ -1300,17 +1402,23 @@ class TestClaudeCodeModelStructuredOutput:
             ModelRequest(parts=[UserPromptPart(content="Rate this code")])
         ]
 
-        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
-            mock_cli = mock_cli_class.return_value
-            mock_cli.execute = AsyncMock(
-                return_value=mock_cli_response_with_structured_output
-            )
+        captured_options: list[ClaudeAgentOptions] = []
 
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message_with_structured_output
+
+        with patch("claudecode_model.model.query", mock_query):
             await model.request(messages, None, params)
 
-            # Verify json_schema is passed to CLI
-            call_kwargs = mock_cli_class.call_args.kwargs
-            assert call_kwargs.get("json_schema") == json_schema
+            # Verify json_schema is passed via output_format
+            assert len(captured_options) == 1
+            assert captured_options[0].output_format == {
+                "type": "json_schema",
+                "schema": json_schema,
+            }
 
 
 class TestClaudeCodeModelExtractJsonSchema:
@@ -1421,3 +1529,701 @@ class TestClaudeCodeModelExtractJsonSchema:
 
         result = model._extract_json_schema(params)
         assert result is None
+
+
+class TestClaudeCodeModelBuildAgentOptions:
+    """Tests for ClaudeCodeModel._build_agent_options method."""
+
+    def test_build_agent_options_default_values(self) -> None:
+        """_build_agent_options should use default model values."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel()
+        options = model._build_agent_options()
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.model == DEFAULT_MODEL
+        assert options.cwd is None
+        assert options.allowed_tools == []
+        assert options.disallowed_tools == []
+        assert options.permission_mode is None
+        assert options.max_turns is None
+        assert options.max_budget_usd is None
+        assert options.system_prompt is None
+        assert options.output_format is None
+
+    def test_build_agent_options_with_custom_model_values(self) -> None:
+        """_build_agent_options should use custom model values from __init__."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel(
+            model_name="claude-opus-4",
+            working_directory="/custom/path",
+            allowed_tools=["Read", "Write"],
+            disallowed_tools=["Bash"],
+            permission_mode="bypassPermissions",
+            max_turns=5,
+        )
+        options = model._build_agent_options()
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.model == "claude-opus-4"
+        assert options.cwd == "/custom/path"
+        assert options.allowed_tools == ["Read", "Write"]
+        assert options.disallowed_tools == ["Bash"]
+        assert options.permission_mode == "bypassPermissions"
+        assert options.max_turns == 5
+
+    def test_build_agent_options_with_override_values(self) -> None:
+        """_build_agent_options should allow override values via parameters."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel(
+            model_name="claude-sonnet-4-5",
+            working_directory="/default/path",
+            max_turns=3,
+        )
+        options = model._build_agent_options(
+            system_prompt="Custom prompt",
+            max_budget_usd=1.5,
+            max_turns=10,  # Override
+            working_directory="/override/path",  # Override
+        )
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.system_prompt == "Custom prompt"
+        assert options.max_budget_usd == 1.5
+        assert options.max_turns == 10
+        assert options.cwd == "/override/path"
+
+    def test_build_agent_options_with_json_schema(self) -> None:
+        """_build_agent_options should convert json_schema to output_format."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        from claudecode_model.types import JsonValue
+
+        model = ClaudeCodeModel()
+        json_schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        options = model._build_agent_options(json_schema=json_schema)
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.output_format is not None
+        assert options.output_format["type"] == "json_schema"
+        assert options.output_format["schema"] == json_schema
+
+    def test_build_agent_options_without_json_schema(self) -> None:
+        """_build_agent_options should not set output_format when json_schema is None."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel()
+        options = model._build_agent_options(json_schema=None)
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.output_format is None
+
+    def test_build_agent_options_with_append_system_prompt(self) -> None:
+        """_build_agent_options should combine system_prompt and append_system_prompt."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel()
+        options = model._build_agent_options(
+            system_prompt="Main prompt",
+            append_system_prompt="Additional instructions",
+        )
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.system_prompt == "Main prompt\n\nAdditional instructions"
+
+    def test_build_agent_options_with_only_append_system_prompt(self) -> None:
+        """_build_agent_options should use append_system_prompt alone when system_prompt is None."""
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        model = ClaudeCodeModel()
+        options = model._build_agent_options(
+            system_prompt=None,
+            append_system_prompt="Additional instructions",
+        )
+
+        assert isinstance(options, ClaudeAgentOptions)
+        assert options.system_prompt == "Additional instructions"
+
+
+class TestClaudeCodeModelResultMessageToCLIResponse:
+    """Tests for ClaudeCodeModel._result_message_to_cli_response method."""
+
+    def test_converts_basic_result_message(self) -> None:
+        """_result_message_to_cli_response should convert basic ResultMessage."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1500,
+            duration_api_ms=1200,
+            is_error=False,
+            num_turns=3,
+            session_id="test-session-123",
+            result="Hello from Claude",
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.type == "result"
+        assert cli_response.subtype == "success"
+        assert cli_response.is_error is False
+        assert cli_response.duration_ms == 1500
+        assert cli_response.duration_api_ms == 1200
+        assert cli_response.num_turns == 3
+        assert cli_response.session_id == "test-session-123"
+        assert cli_response.result == "Hello from Claude"
+
+    def test_converts_result_message_with_usage(self) -> None:
+        """_result_message_to_cli_response should convert usage data."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 10,
+                "cache_read_input_tokens": 5,
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.usage.input_tokens == 100
+        assert cli_response.usage.output_tokens == 50
+        assert cli_response.usage.cache_creation_input_tokens == 10
+        assert cli_response.usage.cache_read_input_tokens == 5
+
+    def test_converts_result_message_with_missing_usage(self) -> None:
+        """_result_message_to_cli_response should handle missing usage."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage=None,
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        # Should default to 0 for all token counts
+        assert cli_response.usage.input_tokens == 0
+        assert cli_response.usage.output_tokens == 0
+        assert cli_response.usage.cache_creation_input_tokens == 0
+        assert cli_response.usage.cache_read_input_tokens == 0
+
+    def test_converts_result_message_with_structured_output(self) -> None:
+        """_result_message_to_cli_response should preserve structured_output."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="",
+            structured_output={"name": "test", "score": 95},
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.structured_output is not None
+        assert cli_response.structured_output["name"] == "test"
+        assert cli_response.structured_output["score"] == 95
+
+    def test_converts_result_message_with_cost(self) -> None:
+        """_result_message_to_cli_response should preserve total_cost_usd."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            total_cost_usd=0.05,
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.total_cost_usd == 0.05
+
+    def test_converts_error_result_message(self) -> None:
+        """_result_message_to_cli_response should preserve is_error flag."""
+        from claude_agent_sdk import ResultMessage
+
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="error",
+            duration_ms=500,
+            duration_api_ms=400,
+            is_error=True,
+            num_turns=0,
+            session_id="test-session",
+            result="An error occurred",
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.is_error is True
+        assert cli_response.subtype == "error"
+        assert cli_response.result == "An error occurred"
+
+
+class TestClaudeCodeModelExecuteSDKQuery:
+    """Tests for ClaudeCodeModel._execute_sdk_query method."""
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_returns_result_message(self) -> None:
+        """_execute_sdk_query should return ResultMessage from SDK."""
+        from unittest.mock import MagicMock
+        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        expected_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        async def mock_query(**kwargs: MagicMock) -> AsyncIterator[ResultMessage]:
+            yield expected_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            result = await model._execute_sdk_query(
+                "Test prompt", options, timeout=60.0
+            )
+
+        assert result is expected_result
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_timeout(self) -> None:
+        """_execute_sdk_query should raise CLIExecutionError on timeout."""
+        import anyio
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def slow_query(**kwargs: object) -> AsyncIterator[object]:
+            await anyio.sleep(10)  # Slow query that will timeout
+            yield None  # pragma: no cover
+
+        with patch("claudecode_model.model.query", slow_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=0.1)
+
+        assert "timed out" in str(exc_info.value).lower()
+        assert exc_info.value.error_type == "timeout"
+        assert exc_info.value.recoverable is True
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_raises_on_no_result_message(self) -> None:
+        """_execute_sdk_query should raise CLIExecutionError when no ResultMessage."""
+        from claude_agent_sdk import ClaudeAgentOptions, UserMessage
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def mock_query_no_result(**kwargs: object) -> AsyncIterator[UserMessage]:
+            yield UserMessage(content="Some message")
+
+        with patch("claudecode_model.model.query", mock_query_no_result):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=60.0)
+
+        assert "No ResultMessage" in str(exc_info.value)
+
+
+class TestClaudeCodeModelSDKIntegration:
+    """Integration tests for ClaudeCodeModel with Claude Agent SDK."""
+
+    @pytest.fixture
+    def mock_result_message(self) -> "ResultMessage":
+        """Return a mock ResultMessage."""
+        from claude_agent_sdk import ResultMessage
+
+        return ResultMessage(
+            subtype="success",
+            duration_ms=1500,
+            duration_api_ms=1200,
+            is_error=False,
+            num_turns=3,
+            session_id="test-session-123",
+            result="Response from SDK",
+            total_cost_usd=0.05,
+            usage={
+                "input_tokens": 200,
+                "output_tokens": 100,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 25,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_uses_sdk_query(
+        self, mock_result_message: "ResultMessage"
+    ) -> None:
+        """request should use Claude Agent SDK query() instead of CLI subprocess."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator["ResultMessage"]:
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+        assert isinstance(response, ModelResponse)
+        assert len(response.parts) == 1
+        assert isinstance(response.parts[0], TextPart)
+        assert response.parts[0].content == "Response from SDK"
+
+    @pytest.mark.asyncio
+    async def test_request_passes_system_prompt_to_sdk(
+        self, mock_result_message: "ResultMessage"
+    ) -> None:
+        """request should pass system prompt to SDK options."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content="Be helpful"),
+                    UserPromptPart(content="Hello"),
+                ]
+            )
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        captured_options: list["ClaudeAgentOptions"] = []
+
+        async def mock_query(
+            prompt: str, options: "ClaudeAgentOptions"
+        ) -> AsyncIterator["ResultMessage"]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        assert len(captured_options) == 1
+        assert captured_options[0].system_prompt == "Be helpful"
+
+    @pytest.mark.asyncio
+    async def test_request_with_model_settings(
+        self, mock_result_message: "ResultMessage"
+    ) -> None:
+        """request should pass model_settings to SDK options."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {
+            "max_budget_usd": 2.0,
+            "max_turns": 5,
+            "working_directory": "/custom/path",
+            "append_system_prompt": "Be concise.",
+        }
+
+        captured_options: list["ClaudeAgentOptions"] = []
+
+        async def mock_query(
+            prompt: str, options: "ClaudeAgentOptions"
+        ) -> AsyncIterator["ResultMessage"]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+        assert len(captured_options) == 1
+        assert captured_options[0].max_budget_usd == 2.0
+        assert captured_options[0].max_turns == 5
+        assert captured_options[0].cwd == "/custom/path"
+        assert captured_options[0].system_prompt == "Be concise."
+
+    @pytest.mark.asyncio
+    async def test_request_with_json_schema(
+        self, mock_result_message: "ResultMessage"
+    ) -> None:
+        """request should pass json_schema as output_format to SDK."""
+        from pydantic_ai.models import OutputObjectDefinition
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        captured_options: list["ClaudeAgentOptions"] = []
+
+        async def mock_query(
+            prompt: str, options: "ClaudeAgentOptions"
+        ) -> AsyncIterator["ResultMessage"]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        assert len(captured_options) == 1
+        assert captured_options[0].output_format is not None
+        assert captured_options[0].output_format["type"] == "json_schema"
+        assert captured_options[0].output_format["schema"] == json_schema
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_uses_sdk(
+        self, mock_result_message: "ResultMessage"
+    ) -> None:
+        """request_with_metadata should use SDK and preserve metadata."""
+        from claudecode_model.types import RequestWithMetadataResult
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator["ResultMessage"]:
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            result = await model.request_with_metadata(messages, None, params)
+
+        assert isinstance(result, RequestWithMetadataResult)
+        assert result.cli_response.total_cost_usd == 0.05
+        assert result.cli_response.num_turns == 3
+        assert result.cli_response.duration_api_ms == 1200
+        assert result.cli_response.session_id == "test-session-123"
+
+
+class TestClaudeCodeModelIsErrorHandling:
+    """Tests for is_error flag handling in _execute_request."""
+
+    @pytest.mark.asyncio
+    async def test_raises_cli_execution_error_when_is_error_true(self) -> None:
+        """_execute_request should raise CLIExecutionError when is_error is True."""
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=True,
+            num_turns=1,
+            session_id="test-session",
+            result="SDK error message",
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        assert "SDK reported error" in str(exc_info.value)
+        assert exc_info.value.error_type == "invalid_response"
+        assert exc_info.value.recoverable is False
+
+    @pytest.mark.asyncio
+    async def test_is_error_with_none_result(self) -> None:
+        """_execute_request should handle is_error=True with None result."""
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=True,
+            num_turns=1,
+            session_id="test-session",
+            result=None,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        assert "Unknown error" in str(exc_info.value)
+
+
+class TestClaudeCodeModelSDKExceptionHandling:
+    """Tests for SDK exception handling in _execute_sdk_query."""
+
+    @pytest.mark.asyncio
+    async def test_sdk_exception_wrapped_in_cli_execution_error(self) -> None:
+        """_execute_sdk_query should wrap SDK exceptions in CLIExecutionError."""
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def mock_query_raises(**kwargs: object) -> AsyncIterator[object]:
+            raise RuntimeError("SDK connection failed")
+            yield  # pragma: no cover
+
+        with patch("claudecode_model.model.query", mock_query_raises):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=60.0)
+
+        assert "SDK query failed" in str(exc_info.value)
+        assert "SDK connection failed" in str(exc_info.value)
+        assert exc_info.value.error_type == "unknown"
+        assert exc_info.value.recoverable is False
+
+    @pytest.mark.asyncio
+    async def test_sdk_exception_preserves_original_exception(self) -> None:
+        """CLIExecutionError should chain the original SDK exception."""
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        async def mock_query_raises(**kwargs: object) -> AsyncIterator[object]:
+            raise ValueError("Invalid API key")
+            yield  # pragma: no cover
+
+        with patch("claudecode_model.model.query", mock_query_raises):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=60.0)
+
+        assert exc_info.value.__cause__ is not None
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+class TestClaudeCodeModelUsageWarning:
+    """Tests for usage data warning in _result_message_to_cli_response."""
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_usage_is_none(self, caplog: object) -> None:
+        """_result_message_to_cli_response should log warning when usage is None."""
+        import logging
+
+        model = ClaudeCodeModel()
+
+        result_no_usage = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage=None,
+        )
+
+        with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
+            cli_response = model._result_message_to_cli_response(result_no_usage)
+
+        assert "usage is None" in caplog.text  # type: ignore[attr-defined]
+        assert cli_response.usage.input_tokens == 0
+        assert cli_response.usage.output_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_usage_present(self, caplog: object) -> None:
+        """_result_message_to_cli_response should not log warning when usage exists."""
+        import logging
+
+        model = ClaudeCodeModel()
+
+        result_with_usage = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+
+        with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
+            cli_response = model._result_message_to_cli_response(result_with_usage)
+
+        assert "usage is None" not in caplog.text  # type: ignore[attr-defined]
+        assert cli_response.usage.input_tokens == 100
+        assert cli_response.usage.output_tokens == 50
