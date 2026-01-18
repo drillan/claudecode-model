@@ -2227,3 +2227,87 @@ class TestClaudeCodeModelUsageWarning:
         assert "usage is None" not in caplog.text  # type: ignore[attr-defined]
         assert cli_response.usage.input_tokens == 100
         assert cli_response.usage.output_tokens == 50
+
+
+class TestClaudeCodeModelSetAgentToolsets:
+    """Tests for ClaudeCodeModel.set_agent_toolsets method."""
+
+    def test_set_agent_toolsets_registers_toolsets(self) -> None:
+        """set_agent_toolsets should register toolsets internally."""
+        from unittest.mock import MagicMock
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "test_tool"
+        mock_tool.description = "A test tool"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+
+        model.set_agent_toolsets([mock_tool])
+
+        assert model._agent_toolsets is not None
+        assert len(model._agent_toolsets) == 1
+
+    def test_set_agent_toolsets_creates_mcp_server(self) -> None:
+        """set_agent_toolsets should create MCP server from toolsets."""
+        from unittest.mock import MagicMock
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "search"
+        mock_tool.description = "Search documents"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+
+        model.set_agent_toolsets([mock_tool])
+
+        assert "pydantic_tools" in model._mcp_servers
+
+    def test_set_agent_toolsets_with_empty_list(self) -> None:
+        """set_agent_toolsets should handle empty list."""
+        model = ClaudeCodeModel()
+        model.set_agent_toolsets([])
+
+        assert model._agent_toolsets == []
+        assert "pydantic_tools" in model._mcp_servers
+
+    def test_set_agent_toolsets_with_none(self) -> None:
+        """set_agent_toolsets should handle None."""
+        model = ClaudeCodeModel()
+        model.set_agent_toolsets(None)
+
+        assert model._agent_toolsets is None
+        assert "pydantic_tools" in model._mcp_servers
+
+    def test_set_agent_toolsets_with_multiple_tools(self) -> None:
+        """set_agent_toolsets should handle multiple tools."""
+        from unittest.mock import MagicMock
+
+        model = ClaudeCodeModel()
+        mock_tool1 = MagicMock()
+        mock_tool1.name = "tool1"
+        mock_tool1.description = "Tool 1"
+        mock_tool1.parameters_json_schema = {"type": "object", "properties": {}}
+
+        mock_tool2 = MagicMock()
+        mock_tool2.name = "tool2"
+        mock_tool2.description = "Tool 2"
+        mock_tool2.parameters_json_schema = {"type": "object", "properties": {}}
+
+        model.set_agent_toolsets([mock_tool1, mock_tool2])
+
+        assert model._agent_toolsets is not None
+        assert len(model._agent_toolsets) == 2
+
+    def test_get_mcp_servers_returns_registered_servers(self) -> None:
+        """get_mcp_servers should return registered MCP servers."""
+        from unittest.mock import MagicMock
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "test"
+        mock_tool.description = "Test"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+
+        model.set_agent_toolsets([mock_tool])
+
+        servers = model.get_mcp_servers()
+        assert "pydantic_tools" in servers
