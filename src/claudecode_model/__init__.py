@@ -15,6 +15,11 @@ from claudecode_model.exceptions import (
 )
 from claudecode_model.json_utils import extract_json
 from claudecode_model.model import ClaudeCodeModel
+from claudecode_model.response_converter import (
+    convert_sdk_messages_to_cli_response,
+    convert_usage_dict_to_cli_usage,
+    extract_text_from_assistant_message,
+)
 from claudecode_model.types import (
     CacheCreation,
     CLIResponse,
@@ -48,6 +53,9 @@ __all__ = [
     "CacheCreation",
     "ModelUsageData",
     "extract_json",
+    "convert_sdk_messages_to_cli_response",
+    "convert_usage_dict_to_cli_usage",
+    "extract_text_from_assistant_message",
 ]
 
 
