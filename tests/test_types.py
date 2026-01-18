@@ -1095,6 +1095,164 @@ class TestCLIResponseStructuredOutput:
         assert content == "Plain text result"
 
 
+class TestCLIResponseJsonSchemaMode:
+    """Tests for CLIResponse with --json-schema option support (Issue #29)."""
+
+    def test_cli_response_accepts_empty_result(self) -> None:
+        """CLIResponse should accept empty result string for json-schema mode."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="",  # Empty result in json-schema mode
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"name": "test", "score": 95},
+        )
+        assert response.result == ""
+        assert response.structured_output == {"name": "test", "score": 95}
+
+    def test_cli_response_result_defaults_to_empty_string(self) -> None:
+        """CLIResponse result should default to empty string when not provided."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"data": "value"},
+        )
+        assert response.result == ""
+
+    def test_cli_response_accepts_errors_field(self) -> None:
+        """CLIResponse should accept errors field for json-schema mode."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            errors=[],
+            structured_output={"name": "test"},
+        )
+        assert response.errors == []
+
+    def test_cli_response_errors_field_with_values(self) -> None:
+        """CLIResponse should accept non-empty errors list."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            errors=["validation error 1", "validation error 2"],
+            structured_output={"partial": "data"},
+        )
+        assert response.errors == ["validation error 1", "validation error 2"]
+        assert len(response.errors) == 2
+
+    def test_cli_response_errors_defaults_to_none(self) -> None:
+        """CLIResponse errors should default to None when not provided."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="test",
+            usage=CLIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+        )
+        assert response.errors is None
+
+    def test_parse_cli_response_json_schema_mode(self) -> None:
+        """parse_cli_response should handle json-schema mode output."""
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1500,
+            "duration_api_ms": 1200,
+            "num_turns": 1,
+            "result": "",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "errors": [],
+            "structured_output": {"name": "Alice", "age": 30},
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.result == ""
+        assert response.errors == []
+        assert response.structured_output == {"name": "Alice", "age": 30}
+
+    def test_parse_cli_response_json_schema_mode_without_result(self) -> None:
+        """parse_cli_response should work when result is missing in json-schema mode."""
+        # Simulating JSON without 'result' field
+        data: CLIResponseData = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 1500,
+            "duration_api_ms": 1200,
+            "num_turns": 1,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "errors": [],
+            "structured_output": {"status": "ok"},
+        }
+
+        response = parse_cli_response(data)
+
+        assert response.result == ""
+        assert response.errors == []
+        assert response.structured_output == {"status": "ok"}
+
+
 class TestParseCLIResponseStructuredOutput:
     """Tests for parse_cli_response with structured_output."""
 

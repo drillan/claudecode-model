@@ -157,6 +157,7 @@ class CLIResponseData(TypedDict, total=False):
     permission_denials: list[PermissionDenialData]
     uuid: str
     structured_output: dict[str, JsonValue]
+    errors: list[str]
 
 
 class CLIUsage(BaseModel):
@@ -180,7 +181,7 @@ class CLIResponse(BaseModel):
     duration_ms: int
     duration_api_ms: int
     num_turns: int
-    result: str
+    result: str = ""
     session_id: str | None = None
     total_cost_usd: float | None = None
     usage: CLIUsage
@@ -190,6 +191,7 @@ class CLIResponse(BaseModel):
     permission_denials: list[PermissionDenial] | None = None
     uuid: str | None = None
     structured_output: dict[str, JsonValue] | None = None
+    errors: list[str] | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
