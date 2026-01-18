@@ -38,10 +38,11 @@ class McpTextContent(TypedDict):
     text: str
 
 
-class McpResponse(TypedDict):
+class McpResponse(TypedDict, total=False):
     """MCP response format with content blocks."""
 
     content: list[McpTextContent]
+    isError: bool
 
 
 class McpServerConfig(TypedDict):
@@ -139,7 +140,10 @@ def _create_async_handler(
             logger.exception("Unexpected error during tool execution")
             error_msg = f"Error: {type(e).__name__}: {e}"
             return dict(
-                McpResponse(content=[McpTextContent(type="text", text=error_msg)])
+                McpResponse(
+                    content=[McpTextContent(type="text", text=error_msg)],
+                    isError=True,
+                )
             )
 
     return handler

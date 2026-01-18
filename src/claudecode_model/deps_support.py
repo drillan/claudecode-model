@@ -30,7 +30,10 @@ from typing import Generic, TypeVar, Union, get_args, get_origin, get_type_hints
 from dacite import from_dict
 from pydantic import BaseModel
 
-from claudecode_model.exceptions import UnsupportedDepsTypeError
+from claudecode_model.exceptions import (
+    TypeHintResolutionError,
+    UnsupportedDepsTypeError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,13 +117,15 @@ def _is_dataclass_serializable(dc_type: type) -> bool:
 
     Returns:
         True if all fields have serializable types.
+
+    Raises:
+        TypeHintResolutionError: If forward references cannot be resolved.
     """
     try:
         type_hints = get_type_hints(dc_type)
     except NameError as e:
-        # Forward references that cannot be resolved
-        logger.debug("Cannot resolve type hints for %s: %s", dc_type.__name__, e)
-        type_hints = {}
+        # Forward references that cannot be resolved - raise error instead of silent fallback
+        raise TypeHintResolutionError(dc_type.__name__, e) from e
 
     for field in fields(dc_type):
         field_type = type_hints.get(field.name, field.type)
@@ -302,7 +307,5 @@ def create_deps_context(deps: T) -> DepsContext[T]:
         >>> ctx.deps
         {'api_key': 'secret'}
     """
-    if not is_instance_serializable(deps):
-        raise UnsupportedDepsTypeError(type(deps).__name__)
-
+    # Validation is performed in DepsContext.__init__
     return DepsContext(deps)

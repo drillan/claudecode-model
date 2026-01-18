@@ -19,6 +19,7 @@ from claudecode_model.exceptions import (
     CLIResponseParseError,
     ClaudeCodeError,
     ErrorType,
+    TypeHintResolutionError,
     UnsupportedDepsTypeError,
 )
 from claudecode_model.json_utils import extract_json
@@ -62,6 +63,7 @@ __all__ = [
     "CLIExecutionError",
     "CLIResponseParseError",
     "UnsupportedDepsTypeError",
+    "TypeHintResolutionError",
     "ErrorType",
     "RequestWithMetadataResult",
     "DEFAULT_MODEL",
