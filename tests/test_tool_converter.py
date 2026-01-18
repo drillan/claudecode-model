@@ -8,12 +8,21 @@ from typing import Any, cast
 
 import pytest
 from claude_agent_sdk import SdkMcpTool
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
+
+from claudecode_model.tool_converter import JsonSchema
 
 
-def _get_input_schema(tool: SdkMcpTool[dict[str, Any]]) -> dict[str, Any]:
+def _get_input_schema(tool: SdkMcpTool[JsonSchema]) -> dict[str, Any]:
     """Helper to get input_schema as dict for testing."""
     return cast(dict[str, Any], tool.input_schema)
+
+
+async def _call_handler(
+    tool: SdkMcpTool[JsonSchema], args: dict[str, object]
+) -> dict[str, Any]:
+    """Helper to call handler with correct types for testing."""
+    return cast(dict[str, Any], await tool.handler(args))  # type: ignore[arg-type]
 
 
 class TestConvertToolToSdkMcpTool:
@@ -273,7 +282,7 @@ class TestHandlerWrapping:
         from claudecode_model.tool_converter import convert_tool
 
         agent = Agent("test")
-        received_args: dict[str, Any] = {}
+        received_args: dict[str, object] = {}
 
         @agent.tool_plain
         def capture_tool(city: str, days: int) -> str:
@@ -287,10 +296,7 @@ class TestHandlerWrapping:
 
         result = convert_tool(tool)
 
-        # Call handler
-        asyncio.get_event_loop().run_until_complete(
-            result.handler({"city": "Tokyo", "days": 5})
-        )
+        asyncio.run(_call_handler(result, {"city": "Tokyo", "days": 5}))
 
         assert received_args["city"] == "Tokyo"
         assert received_args["days"] == 5
@@ -311,9 +317,7 @@ class TestHandlerWrapping:
 
         result = convert_tool(tool)
 
-        output = asyncio.get_event_loop().run_until_complete(
-            result.handler({"x": "test"})
-        )
+        output: dict[str, Any] = asyncio.run(_call_handler(result, {"x": "test"}))
 
         # Should be MCP format
         assert "content" in output
@@ -367,13 +371,13 @@ class TestReturnValueConversion:
         """Already MCP format should be returned as-is."""
         from claudecode_model.tool_converter import _format_return_value_as_mcp
 
-        mcp_response: dict[str, Any] = {
+        mcp_response: dict[str, object] = {
             "content": [{"type": "text", "text": "existing"}]
         }
 
         result = _format_return_value_as_mcp(mcp_response)
 
-        assert result == mcp_response
+        assert result == {"content": [{"type": "text", "text": "existing"}]}
 
 
 class TestErrorHandling:
@@ -385,6 +389,25 @@ class TestErrorHandling:
 
         with pytest.raises(TypeError, match="expected.*Tool"):
             convert_tool("not a tool")  # type: ignore[arg-type]
+
+    def test_raises_on_takes_ctx_true(self) -> None:
+        """Tool with takes_ctx=True should raise NotImplementedError."""
+        from claudecode_model.tool_converter import convert_tool
+
+        agent: Agent[str] = Agent("test")
+
+        @agent.tool
+        def context_tool(ctx: RunContext[str], x: str) -> str:
+            """Tool that takes context."""
+            return x
+
+        tools = list(agent._function_toolset.tools.values())
+        tool = tools[0]
+
+        with pytest.raises(
+            NotImplementedError, match="takes_ctx=True are not supported"
+        ):
+            convert_tool(tool)
 
     def test_handler_exception_returns_error_format(self) -> None:
         """Handler exception should return error in MCP format."""
@@ -402,9 +425,7 @@ class TestErrorHandling:
 
         result = convert_tool(tool)
 
-        output = asyncio.get_event_loop().run_until_complete(
-            result.handler({"x": "test"})
-        )
+        output: dict[str, Any] = asyncio.run(_call_handler(result, {"x": "test"}))
 
         # Should have error indication in content
         assert "content" in output
@@ -416,7 +437,7 @@ class TestConvertToolsToMcpServer:
     """Tests for convert_tools_to_mcp_server function."""
 
     def test_creates_mcp_server_config(self) -> None:
-        """Should create valid McpSdkServerConfig."""
+        """Should create valid McpServerConfig."""
         from claudecode_model.tool_converter import convert_tools_to_mcp_server
 
         agent = Agent("test")
@@ -428,12 +449,14 @@ class TestConvertToolsToMcpServer:
 
         tools = list(agent._function_toolset.tools.values())
 
-        result = convert_tools_to_mcp_server(tools)
+        result = convert_tools_to_mcp_server(
+            tools, server_name="test-server", server_version="1.0.0"
+        )
 
-        # Should be a dict (McpSdkServerConfig is a dict subclass)
+        # Should be a dict (McpServerConfig is a TypedDict)
         assert isinstance(result, dict)
-        assert "name" in result
-        assert "version" in result
+        assert result["name"] == "test-server"
+        assert result["version"] == "1.0.0"
         assert "tools" in result
 
     def test_converts_multiple_tools(self) -> None:
@@ -459,7 +482,9 @@ class TestConvertToolsToMcpServer:
 
         tools = list(agent._function_toolset.tools.values())
 
-        result = convert_tools_to_mcp_server(tools)
+        result = convert_tools_to_mcp_server(
+            tools, server_name="multi-server", server_version="1.0.0"
+        )
 
         assert len(result["tools"]) == 3
         tool_names = {t.name for t in result["tools"]}
@@ -471,23 +496,29 @@ class TestConvertToolsToMcpServer:
         """Empty tool list should create config with no tools."""
         from claudecode_model.tool_converter import convert_tools_to_mcp_server
 
-        result = convert_tools_to_mcp_server([])
+        result = convert_tools_to_mcp_server(
+            [], server_name="empty-server", server_version="1.0.0"
+        )
 
         assert isinstance(result, dict)
         assert result["tools"] == []
 
-    def test_uses_custom_server_name(self) -> None:
-        """Custom server name should be used."""
+    def test_uses_server_name(self) -> None:
+        """Server name should be set correctly."""
         from claudecode_model.tool_converter import convert_tools_to_mcp_server
 
-        result = convert_tools_to_mcp_server([], server_name="my-custom-server")
+        result = convert_tools_to_mcp_server(
+            [], server_name="my-custom-server", server_version="1.0.0"
+        )
 
         assert result["name"] == "my-custom-server"
 
-    def test_uses_custom_server_version(self) -> None:
-        """Custom server version should be used."""
+    def test_uses_server_version(self) -> None:
+        """Server version should be set correctly."""
         from claudecode_model.tool_converter import convert_tools_to_mcp_server
 
-        result = convert_tools_to_mcp_server([], server_version="2.0.0")
+        result = convert_tools_to_mcp_server(
+            [], server_name="test-server", server_version="2.0.0"
+        )
 
         assert result["version"] == "2.0.0"

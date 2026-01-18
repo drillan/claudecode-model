@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 from claude_agent_sdk import SdkMcpTool
 from pydantic_ai.tools import Tool
@@ -18,23 +19,42 @@ from pydantic_ai.tools import Tool
 if TYPE_CHECKING:
     from typing import Any
 
+logger = logging.getLogger(__name__)
+
+
+# Type alias for JSON schema dict
+type JsonSchema = dict[str, object]
+
+
+class McpTextContent(TypedDict):
+    """MCP text content block."""
+
+    type: Literal["text"]
+    text: str
+
+
+class McpResponse(TypedDict):
+    """MCP response format with content blocks."""
+
+    content: list[McpTextContent]
+
 
 class McpServerConfig(TypedDict):
     """Configuration for an MCP server with converted tools."""
 
     name: str
     version: str
-    tools: list[SdkMcpTool[dict[str, Any]]]
+    tools: list[SdkMcpTool[JsonSchema]]
 
 
-def _format_return_value_as_mcp(result: object) -> dict[str, Any]:
+def _format_return_value_as_mcp(result: object) -> McpResponse:
     """Convert a return value to MCP format.
 
     Args:
         result: The return value from a tool function.
 
     Returns:
-        A dict in MCP format with "content" key containing text blocks.
+        An McpResponse with "content" key containing text blocks.
 
     Examples:
         >>> _format_return_value_as_mcp("hello")
@@ -48,7 +68,14 @@ def _format_return_value_as_mcp(result: object) -> dict[str, Any]:
         if isinstance(content, list) and len(content) > 0:
             first_item = content[0]
             if isinstance(first_item, dict) and first_item.get("type") == "text":
-                return result  # type: ignore[return-value]
+                # Already in MCP format, cast to McpResponse
+                return McpResponse(
+                    content=[
+                        McpTextContent(type="text", text=item.get("text", ""))
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
+                )
 
     # Convert to text
     if result is None:
@@ -60,39 +87,51 @@ def _format_return_value_as_mcp(result: object) -> dict[str, Any]:
     else:
         text = str(result)
 
-    return {"content": [{"type": "text", "text": text}]}
+    return McpResponse(content=[McpTextContent(type="text", text=text)])
 
 
 def _create_async_handler(
-    func: Callable[..., Any],
-    takes_ctx: bool = False,
-) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+    func: Callable[..., object],
+    takes_ctx: bool,
+) -> Callable[[JsonSchema], Awaitable[dict[str, Any]]]:
     """Wrap a sync/async function as an async SDK handler.
 
     Args:
         func: The original tool function (sync or async).
         takes_ctx: Whether the function takes a RunContext as first argument.
-                   Currently only False is supported.
 
     Returns:
         An async function that accepts a dict and returns MCP format response.
-    """
 
-    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+    Raises:
+        NotImplementedError: If takes_ctx is True (not supported).
+    """
+    if takes_ctx:
+        raise NotImplementedError(
+            "Tools with takes_ctx=True are not supported. "
+            "Please use tool_plain decorator instead."
+        )
+
+    async def handler(args: JsonSchema) -> dict[str, Any]:
         try:
             if asyncio.iscoroutinefunction(func):
                 result = await func(**args)
             else:
                 result = func(**args)
-            return _format_return_value_as_mcp(result)
+            return dict(_format_return_value_as_mcp(result))
+        except asyncio.CancelledError:
+            raise  # Re-raise to allow proper task cancellation
         except Exception as e:
+            logger.exception("Unexpected error during tool execution")
             error_msg = f"Error: {type(e).__name__}: {e}"
-            return {"content": [{"type": "text", "text": error_msg}]}
+            return dict(
+                McpResponse(content=[McpTextContent(type="text", text=error_msg)])
+            )
 
     return handler
 
 
-def convert_tool(tool: Tool[Any]) -> SdkMcpTool[dict[str, Any]]:
+def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
     """Convert a pydantic-ai Tool to SdkMcpTool.
 
     Args:
@@ -103,11 +142,12 @@ def convert_tool(tool: Tool[Any]) -> SdkMcpTool[dict[str, Any]]:
 
     Raises:
         TypeError: If the input is not a Tool instance.
+        NotImplementedError: If the tool uses takes_ctx=True.
 
     Note:
         This function uses pydantic-ai internal APIs that may change.
 
-    Example:
+    Examples:
         >>> from pydantic_ai import Agent
         >>> agent = Agent("test")
         >>> @agent.tool_plain
@@ -137,17 +177,17 @@ def convert_tool(tool: Tool[Any]) -> SdkMcpTool[dict[str, Any]]:
 
 
 def convert_tools_to_mcp_server(
-    tools: list[Tool[Any]],
+    tools: list[Tool[object]],
     *,
-    server_name: str = "pydantic-tools",
-    server_version: str = "1.0.0",
+    server_name: str,
+    server_version: str,
 ) -> McpServerConfig:
     """Convert a list of pydantic-ai Tools to MCP server configuration.
 
     Args:
         tools: List of pydantic-ai Tool objects.
-        server_name: Name for the MCP server.
-        server_version: Version for the MCP server.
+        server_name: Name for the MCP server (required).
+        server_version: Version for the MCP server (required).
 
     Returns:
         McpServerConfig containing name, version, and converted tools.
@@ -155,16 +195,18 @@ def convert_tools_to_mcp_server(
     Note:
         This function uses pydantic-ai internal APIs that may change.
 
-    Example:
+    Examples:
         >>> from pydantic_ai import Agent
         >>> agent = Agent("test")
         >>> @agent.tool_plain
         ... def get_weather(city: str) -> str:
         ...     return f"Weather in {city}"
         >>> tools = list(agent._function_toolset.tools.values())
-        >>> config = convert_tools_to_mcp_server(tools)
+        >>> config = convert_tools_to_mcp_server(
+        ...     tools, server_name="my-server", server_version="1.0.0"
+        ... )
         >>> config["name"]
-        'pydantic-tools'
+        'my-server'
     """
     sdk_tools = [convert_tool(tool) for tool in tools]
 

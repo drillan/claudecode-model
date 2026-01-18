@@ -21,6 +21,10 @@ from claudecode_model.response_converter import (
     extract_text_from_assistant_message,
 )
 from claudecode_model.tool_converter import (
+    JsonSchema,
+    McpResponse,
+    McpServerConfig,
+    McpTextContent,
     convert_tool,
     convert_tools_to_mcp_server,
 )
@@ -62,6 +66,10 @@ __all__ = [
     "extract_text_from_assistant_message",
     "convert_tool",
     "convert_tools_to_mcp_server",
+    "JsonSchema",
+    "McpResponse",
+    "McpServerConfig",
+    "McpTextContent",
 ]
 
 
