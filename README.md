@@ -74,9 +74,13 @@ def get_weather(city: str) -> str:
 
 @agent.tool_plain
 def calculate(expression: str) -> str:
-    """Calculate a mathematical expression."""
+    """Calculate a mathematical expression.
+
+    WARNING: This demo uses eval() for simplicity.
+    In production, use a safe library like `simpleeval` or `asteval`.
+    """
     try:
-        result = eval(expression)  # Note: use safe evaluation in production
+        result = eval(expression)  # UNSAFE: demo only
         return f"Result: {result}"
     except Exception as e:
         return f"Error: {e}"
@@ -221,8 +225,9 @@ params = ModelRequestParameters()
 
 result = await model.request_with_metadata(messages, None, params)
 
-# Access metadata
-print(f"Cost: ${result.cli_response.total_cost_usd}")
+# Access metadata (note: total_cost_usd may be None)
+cost = result.cli_response.total_cost_usd
+print(f"Cost: ${cost if cost is not None else 'N/A'}")
 print(f"Turns: {result.cli_response.num_turns}")
 print(f"Input tokens: {result.cli_response.usage.input_tokens}")
 print(f"Output tokens: {result.cli_response.usage.output_tokens}")
@@ -316,6 +321,7 @@ print(result.output)
 ### Exceptions
 
 - `ClaudeCodeError`: Base exception
+- `CLINotFoundError`: Claude CLI executable not found
 - `CLIExecutionError`: SDK execution failed
 - `CLIResponseParseError`: Response parsing failed
 - `UnsupportedDepsTypeError`: Non-serializable dependency type

@@ -12,9 +12,13 @@ Usage:
     python example/function_tools.py
 """
 
+from collections.abc import Sequence
+from typing import cast
+
 from pydantic_ai import Agent
 
 from claudecode_model import ClaudeCodeModel
+from claudecode_model.mcp_integration import PydanticAITool
 
 
 def main() -> None:
@@ -57,14 +61,16 @@ def main() -> None:
     def calculate(expression: str) -> str:
         """Calculate a mathematical expression.
 
+        WARNING: This demo uses eval() for simplicity.
+        In production, use a safe library like `simpleeval` or `asteval`.
+
         Args:
             expression: Mathematical expression to evaluate (e.g., "2 + 2", "15 * 7").
 
         Returns:
             The result of the calculation or an error message.
         """
-        # WARNING: In production, use a safe expression evaluator
-        # This is simplified for demonstration purposes
+        # UNSAFE: demo only - use simpleeval/asteval in production
         allowed_chars = set("0123456789+-*/.() ")
         if not all(c in allowed_chars for c in expression):
             return "Error: Only basic math operations are allowed"
@@ -96,7 +102,9 @@ def main() -> None:
 
     # Register tools with the model's MCP server
     # This is required for Claude to be able to call the tools
-    tools = list(agent._function_toolset.tools.values())
+    # Cast is needed because pydantic-ai Tool[Any] is structurally compatible
+    # with PydanticAITool protocol but mypy can't infer this automatically
+    tools = cast(Sequence[PydanticAITool], list(agent._function_toolset.tools.values()))
     model.set_agent_toolsets(tools)
 
     # Run the agent with a prompt that will use the tools

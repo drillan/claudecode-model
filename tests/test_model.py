@@ -2379,6 +2379,7 @@ class TestBuildAgentOptionsMcpServers:
 
         # Verify mcp_servers is passed to ClaudeAgentOptions
         assert options.mcp_servers is not None
+        assert isinstance(options.mcp_servers, dict)
         assert "pydantic_tools" in options.mcp_servers
 
     def test_build_agent_options_empty_mcp_servers_when_no_toolsets(self) -> None:
@@ -2442,4 +2443,5 @@ class TestBuildAgentOptionsMcpServers:
 
         assert len(captured_options) == 1
         assert captured_options[0].mcp_servers is not None
+        assert isinstance(captured_options[0].mcp_servers, dict)
         assert "pydantic_tools" in captured_options[0].mcp_servers
