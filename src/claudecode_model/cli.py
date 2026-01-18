@@ -11,7 +11,12 @@ from claudecode_model.exceptions import (
     CLINotFoundError,
     CLIResponseParseError,
 )
-from claudecode_model.types import CLIResponse, CLIResponseData, parse_cli_response
+from claudecode_model.types import (
+    CLIResponse,
+    CLIResponseData,
+    JsonValue,
+    parse_cli_response,
+)
 
 # Constants
 DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -35,6 +40,7 @@ class ClaudeCodeCLI:
         max_budget_usd: float | None = None,
         append_system_prompt: str | None = None,
         max_turns: int | None = None,
+        json_schema: dict[str, JsonValue] | None = None,
     ) -> None:
         if max_budget_usd is not None and max_budget_usd < 0:
             raise ValueError("max_budget_usd must be non-negative")
@@ -54,6 +60,7 @@ class ClaudeCodeCLI:
         )
         self.append_system_prompt = append_system_prompt
         self.max_turns = max_turns
+        self.json_schema = json_schema
 
         self._cli_path: str | None = None
 
@@ -121,6 +128,10 @@ class ClaudeCodeCLI:
 
         if self.max_turns is not None:
             cmd.extend(["--max-turns", str(self.max_turns)])
+
+        if self.json_schema is not None:
+            schema_json = json.dumps(self.json_schema, ensure_ascii=False)
+            cmd.extend(["--json-schema", schema_json])
 
         cmd.append("--")  # End of options marker
         cmd.append(prompt)

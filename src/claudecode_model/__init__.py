@@ -13,6 +13,7 @@ from claudecode_model.exceptions import (
     ClaudeCodeError,
     ErrorType,
 )
+from claudecode_model.json_utils import extract_json
 from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import (
     CacheCreation,
@@ -46,6 +47,7 @@ __all__ = [
     "ServerToolUse",
     "CacheCreation",
     "ModelUsageData",
+    "extract_json",
 ]
 
 

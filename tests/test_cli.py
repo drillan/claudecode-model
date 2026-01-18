@@ -12,6 +12,7 @@ from claudecode_model.cli import (
     MAX_PROMPT_LENGTH,
     ClaudeCodeCLI,
 )
+from claudecode_model.types import JsonValue
 from claudecode_model.exceptions import (
     CLIExecutionError,
     CLINotFoundError,
@@ -521,3 +522,156 @@ class TestClaudeCodeCLIExecute:
             with pytest.raises(asyncio.CancelledError):
                 await cli.execute("Hello")
             mock_process.kill.assert_called_once()
+
+
+class TestClaudeCodeCLIJsonSchema:
+    """Tests for ClaudeCodeCLI json_schema parameter."""
+
+    def test_json_schema_defaults_to_none(self) -> None:
+        """ClaudeCodeCLI json_schema should default to None."""
+        cli = ClaudeCodeCLI()
+        assert cli.json_schema is None
+
+    def test_json_schema_accepts_dict(self) -> None:
+        """ClaudeCodeCLI should accept json_schema dict."""
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+        cli = ClaudeCodeCLI(json_schema=schema)
+        assert cli.json_schema == schema
+
+    def test_build_command_without_json_schema(self) -> None:
+        """_build_command should not include --json-schema when not set."""
+        cli = ClaudeCodeCLI()
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--json-schema" not in cmd
+
+    def test_build_command_with_json_schema(self) -> None:
+        """_build_command should include --json-schema when set."""
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+        cli = ClaudeCodeCLI(json_schema=schema)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            assert "--json-schema" in cmd
+            # The schema should be JSON-serialized
+            schema_index = cmd.index("--json-schema")
+            schema_value = cmd[schema_index + 1]
+            # Verify it's valid JSON
+            parsed = json.loads(schema_value)
+            assert parsed == schema
+
+    def test_build_command_with_complex_json_schema(self) -> None:
+        """_build_command should handle complex JSON schema correctly."""
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"},
+                    },
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["user"],
+        }
+        cli = ClaudeCodeCLI(json_schema=schema)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            schema_index = cmd.index("--json-schema")
+            schema_value = cmd[schema_index + 1]
+            parsed = json.loads(schema_value)
+            assert parsed == schema
+
+    def test_build_command_json_schema_before_end_of_options(self) -> None:
+        """_build_command should place --json-schema before end-of-options marker."""
+        schema: dict[str, JsonValue] = {"type": "object"}
+        cli = ClaudeCodeCLI(json_schema=schema)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            json_schema_index = cmd.index("--json-schema")
+            double_dash_index = cmd.index("--")
+            # --json-schema should come before --
+            assert json_schema_index < double_dash_index
+
+    @pytest.mark.asyncio
+    async def test_execute_with_json_schema_returns_structured_output(self) -> None:
+        """execute should return response with structured_output when json_schema is set."""
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+        }
+        cli = ClaudeCodeCLI(json_schema=schema)
+
+        response_json = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "duration_ms": 1000,
+                "duration_api_ms": 800,
+                "num_turns": 1,
+                "result": "Generated output",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+                "structured_output": {"name": "test", "score": 95},
+            }
+        )
+
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(response_json.encode(), b""))
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/claude"),
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ),
+        ):
+            response = await cli.execute("Generate something")
+            assert response.structured_output is not None
+            assert response.structured_output["name"] == "test"
+            assert response.structured_output["score"] == 95
+
+    def test_json_schema_with_unicode(self) -> None:
+        """_build_command should handle JSON schema with Unicode characters."""
+        schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "\u65e5\u672c\u8a9e\u306e\u8aac\u660e",
+                },
+            },
+        }
+        cli = ClaudeCodeCLI(json_schema=schema)
+        with patch("shutil.which", return_value="/usr/bin/claude"):
+            cmd = cli._build_command("test")
+            schema_index = cmd.index("--json-schema")
+            schema_value = cmd[schema_index + 1]
+            parsed = json.loads(schema_value)
+            assert (
+                parsed["properties"]["message"]["description"]
+                == "\u65e5\u672c\u8a9e\u306e\u8aac\u660e"
+            )

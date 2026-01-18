@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import NamedTuple, TypedDict
 
 from pydantic import BaseModel, Field
@@ -153,6 +154,7 @@ class CLIResponseData(TypedDict, total=False):
     model_usage: dict[str, ModelUsageDataDict]
     permission_denials: list[PermissionDenialData]
     uuid: str
+    structured_output: dict[str, JsonValue]
 
 
 class CLIUsage(BaseModel):
@@ -185,13 +187,24 @@ class CLIResponse(BaseModel):
     )
     permission_denials: list[PermissionDenial] | None = None
     uuid: str | None = None
+    structured_output: dict[str, JsonValue] | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
     def to_model_response(self, model_name: str | None = None) -> ModelResponse:
-        """Convert CLI response to pydantic-ai ModelResponse."""
+        """Convert CLI response to pydantic-ai ModelResponse.
+
+        If structured_output is present, returns its JSON serialization.
+        Otherwise returns the text result.
+        """
+        # Use structured_output if available, otherwise use result
+        if self.structured_output is not None:
+            content = json.dumps(self.structured_output, ensure_ascii=False)
+        else:
+            content = self.result
+
         return ModelResponse(
-            parts=[TextPart(content=self.result)],
+            parts=[TextPart(content=content)],
             usage=RequestUsage(
                 input_tokens=self.usage.input_tokens,
                 output_tokens=self.usage.output_tokens,
