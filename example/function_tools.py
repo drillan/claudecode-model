@@ -9,7 +9,7 @@ Requirements:
     - claudecode-model installed
 
 Usage:
-    python examples/function_tools.py
+    python example/function_tools.py
 """
 
 from pydantic_ai import Agent
@@ -72,24 +72,27 @@ def main() -> None:
         try:
             result = eval(expression)  # noqa: S307
             return f"{expression} = {result}"
-        except Exception as e:
-            return f"Error calculating '{expression}': {e}"
+        except (SyntaxError, ValueError, TypeError, ZeroDivisionError, NameError) as e:
+            return f"Error calculating '{expression}': {type(e).__name__}: {e}"
 
     @agent.tool_plain
     def get_time(timezone: str = "UTC") -> str:
-        """Get the current time in a specified timezone.
+        """Get the current UTC time.
+
+        Note: This is a simplified implementation that always returns UTC time.
+        The timezone parameter is accepted but not used for actual conversion.
 
         Args:
-            timezone: Timezone name (e.g., "UTC", "JST", "EST").
+            timezone: Timezone name (ignored in this demo, always returns UTC).
 
         Returns:
-            Current time in the specified timezone.
+            Current UTC time.
         """
         from datetime import datetime, timezone as tz
 
-        # Simplified timezone handling for demonstration
+        # Simplified: always returns UTC time
         now = datetime.now(tz.utc)
-        return f"Current time ({timezone}): {now.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        return f"Current time (UTC): {now.strftime('%Y-%m-%d %H:%M:%S')} UTC"
 
     # Run the agent with a prompt that will use the tools
     print("Running agent with function tools...")
@@ -109,4 +112,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    from claudecode_model.exceptions import CLIExecutionError
+
+    try:
+        main()
+    except CLIExecutionError as e:
+        print(f"CLI execution failed: {e}", file=sys.stderr)
+        sys.exit(1)

@@ -21,7 +21,7 @@ Unsupported dependency types (will raise UnsupportedDepsTypeError):
     - File handles
 
 Usage:
-    python examples/tools_with_deps.py
+    python example/tools_with_deps.py
 """
 
 from dataclasses import dataclass
@@ -38,7 +38,7 @@ from claudecode_model import (
 
 
 # Example 1: Using dataclass as dependencies
-@dataclass
+@dataclass(frozen=True)
 class ApiConfig:
     """Configuration for API calls."""
 
@@ -222,7 +222,7 @@ def example_tool_with_deps() -> None:
 
 
 # Example 6: Nested dataclass dependencies
-@dataclass
+@dataclass(frozen=True)
 class DatabaseConfig:
     """Database configuration."""
 
@@ -231,7 +231,7 @@ class DatabaseConfig:
     name: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration with nested dataclass."""
 
@@ -284,4 +284,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    from claudecode_model.exceptions import CLIExecutionError
+
+    try:
+        main()
+    except CLIExecutionError as e:
+        print(f"CLI execution failed: {e}", file=sys.stderr)
+        sys.exit(1)

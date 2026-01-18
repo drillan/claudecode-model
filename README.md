@@ -179,9 +179,9 @@ print(ctx.deps["api_key"])  # "secret"
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `model_name` | `str` | `"claude-sonnet-4-20250514"` | Claude model to use |
+| `model_name` | `str` | `"claude-sonnet-4-5"` | Claude model to use |
 | `working_directory` | `str \| None` | `None` | Working directory for CLI execution |
-| `timeout` | `float` | `600.0` | Timeout in seconds |
+| `timeout` | `float` | `120.0` | Timeout in seconds |
 | `allowed_tools` | `list[str] \| None` | `None` | List of allowed CLI tools |
 | `disallowed_tools` | `list[str] \| None` | `None` | List of disallowed CLI tools |
 | `permission_mode` | `str \| None` | `None` | Permission mode (e.g., "bypassPermissions") |
@@ -308,7 +308,8 @@ print(result.output)
 
 - `DepsContext[T]`: Lightweight RunContext emulation
 - `create_deps_context(deps)`: Create DepsContext instance
-- `is_serializable_type(type)`: Check if type is serializable
+- `is_serializable_type(type)`: Check if a type is serializable
+- `is_instance_serializable(obj)`: Check if an instance is serializable
 - `serialize_deps(deps)`: Serialize to JSON string
 - `deserialize_deps(json_str, type)`: Deserialize from JSON
 
