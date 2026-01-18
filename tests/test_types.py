@@ -1253,6 +1253,146 @@ class TestCLIResponseJsonSchemaMode:
         assert response.structured_output == {"status": "ok"}
 
 
+class TestCLIResponseValidation:
+    """Tests for CLIResponse validation (Issue #29 - Review Comments)."""
+
+    def test_rejects_empty_result_with_none_structured_output(self) -> None:
+        """CLIResponse should reject when result is empty and structured_output is None.
+
+        This prevents silent failures where neither text nor structured output is available.
+        """
+        with pytest.raises(ValueError, match="result.*structured_output"):
+            CLIResponse(
+                type="result",
+                subtype="success",
+                is_error=False,
+                duration_ms=1000,
+                duration_api_ms=800,
+                num_turns=1,
+                result="",
+                usage=CLIUsage(
+                    input_tokens=100,
+                    output_tokens=50,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                structured_output=None,
+            )
+
+    def test_accepts_empty_result_with_structured_output(self) -> None:
+        """CLIResponse should accept empty result when structured_output is present."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"name": "test"},
+        )
+        assert response.result == ""
+        assert response.structured_output is not None
+
+    def test_accepts_nonempty_result_with_none_structured_output(self) -> None:
+        """CLIResponse should accept non-empty result when structured_output is None."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Hello, world!",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output=None,
+        )
+        assert response.result == "Hello, world!"
+        assert response.structured_output is None
+
+    def test_to_model_response_with_errors(self) -> None:
+        """to_model_response should work when errors are present."""
+        response = CLIResponse(
+            type="result",
+            subtype="success",
+            is_error=False,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            errors=["validation error 1"],
+            structured_output={"partial": "data"},
+        )
+
+        model_response = response.to_model_response(model_name="test-model")
+
+        # Should still return the structured_output as JSON
+        import json
+
+        content = model_response.parts[0].content  # type: ignore[union-attr]
+        parsed = json.loads(content)  # type: ignore[arg-type]
+        assert parsed == {"partial": "data"}
+
+    def test_is_error_true_with_errors_list(self) -> None:
+        """CLIResponse should accept is_error=True with non-empty errors list."""
+        response = CLIResponse(
+            type="result",
+            subtype="error",
+            is_error=True,
+            duration_ms=1000,
+            duration_api_ms=800,
+            num_turns=1,
+            result="Error occurred",
+            usage=CLIUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            errors=["critical error", "another error"],
+        )
+        assert response.is_error is True
+        assert response.errors is not None
+        assert len(response.errors) == 2
+
+    def test_rejects_invalid_errors_type(self) -> None:
+        """CLIResponse should reject invalid errors type (list of integers)."""
+        with pytest.raises(ValidationError):
+            CLIResponse(
+                type="result",
+                subtype="success",
+                is_error=False,
+                duration_ms=1000,
+                duration_api_ms=800,
+                num_turns=1,
+                result="test",
+                usage=CLIUsage(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                errors=[1, 2, 3],  # type: ignore[list-item]
+            )
+
+
 class TestParseCLIResponseStructuredOutput:
     """Tests for parse_cli_response with structured_output."""
 
