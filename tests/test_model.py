@@ -74,6 +74,27 @@ class TestClaudeCodeModelProperties:
         assert model.system == "claude-code"
 
 
+class TestClaudeCodeModelProfile:
+    """Tests for ClaudeCodeModel profile configuration."""
+
+    def test_profile_supports_json_schema_output(self) -> None:
+        """ClaudeCodeModel profile should support JSON schema output."""
+        model = ClaudeCodeModel()
+        assert model.profile.supports_json_schema_output is True
+
+    def test_profile_default_structured_output_mode_is_native(self) -> None:
+        """ClaudeCodeModel profile should default to native output mode."""
+        model = ClaudeCodeModel()
+        assert model.profile.default_structured_output_mode == "native"
+
+    def test_profile_is_cached(self) -> None:
+        """ClaudeCodeModel profile should be cached (same instance)."""
+        model = ClaudeCodeModel()
+        profile1 = model.profile
+        profile2 = model.profile
+        assert profile1 is profile2
+
+
 class TestClaudeCodeModelRepr:
     """Tests for ClaudeCodeModel __repr__."""
 
@@ -1238,3 +1259,55 @@ class TestClaudeCodeModelStructuredOutput:
             assert result.cli_response.structured_output is not None
             assert result.cli_response.structured_output["name"] == "test"
             assert result.cli_response.structured_output["score"] == 95
+
+    @pytest.mark.asyncio
+    async def test_agent_with_output_type_auto_generates_json_schema(
+        self, mock_cli_response_with_structured_output: CLIResponse
+    ) -> None:
+        """Agent with output_type should automatically use --json-schema.
+
+        This test verifies that the profile settings enable automatic JSON schema
+        generation when pydantic-ai Agent uses output_type.
+        """
+        from pydantic import BaseModel
+        from pydantic_ai.models import OutputObjectDefinition
+
+        class Evaluation(BaseModel):
+            score: int
+            comment: str
+
+        model = ClaudeCodeModel()
+
+        # Verify profile settings enable auto JSON schema
+        assert model.profile.supports_json_schema_output is True
+        assert model.profile.default_structured_output_mode == "native"
+
+        # Create parameters simulating what Agent would create with output_type
+        json_schema = Evaluation.model_json_schema()
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="Evaluation",
+                description="Evaluation output",
+                strict=True,
+            ),
+        )
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Rate this code")])
+        ]
+
+        with patch("claudecode_model.model.ClaudeCodeCLI") as mock_cli_class:
+            mock_cli = mock_cli_class.return_value
+            mock_cli.execute = AsyncMock(
+                return_value=mock_cli_response_with_structured_output
+            )
+
+            await model.request(messages, None, params)
+
+            # Verify json_schema is passed to CLI
+            call_kwargs = mock_cli_class.call_args.kwargs
+            assert call_kwargs.get("json_schema") == json_schema

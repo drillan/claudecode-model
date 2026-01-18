@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 from pydantic_ai.messages import (
@@ -14,6 +15,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import Model
+from pydantic_ai.profiles import ModelProfile
 
 from claudecode_model.cli import (
     DEFAULT_MODEL,
@@ -60,6 +62,19 @@ class ClaudeCodeModel(Model):
     def system(self) -> str:
         """Return the system identifier for OpenTelemetry."""
         return "claude-code"
+
+    @cached_property
+    def profile(self) -> ModelProfile:
+        """Return model profile with JSON schema output support.
+
+        Claude Code CLI supports --json-schema option for structured output,
+        so we enable supports_json_schema_output and set default_structured_output_mode
+        to 'native' to leverage this capability.
+        """
+        return ModelProfile(
+            supports_json_schema_output=True,
+            default_structured_output_mode="native",
+        )
 
     def _extract_system_prompt(self, messages: list[ModelMessage]) -> str | None:
         """Extract system prompt from messages."""
