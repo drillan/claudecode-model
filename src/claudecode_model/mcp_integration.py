@@ -65,6 +65,69 @@ class ToolValidationError(ValueError):
     pass
 
 
+def _get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
+    """Get parameters JSON schema from various tool types.
+
+    Supports multiple access patterns:
+    - Direct parameters_json_schema attribute (ToolDefinition style)
+    - function_schema.json_schema (pydantic-ai Tool class)
+    - tool_def.parameters_json_schema (pydantic-ai Tool class)
+
+    Args:
+        tool: A tool object that may have JSON schema accessible via
+              different attribute paths.
+
+    Returns:
+        The JSON schema dictionary for the tool's parameters.
+
+    Raises:
+        ToolValidationError: If no JSON schema can be extracted from the tool,
+            or if the schema attribute exists but is not a dict.
+    """
+    tool_name = getattr(tool, "name", str(tool))
+
+    # Try direct parameters_json_schema attribute first
+    if hasattr(tool, "parameters_json_schema"):
+        schema = getattr(tool, "parameters_json_schema")
+        if isinstance(schema, dict):
+            return schema
+        raise ToolValidationError(
+            f"Tool '{tool_name}' parameters_json_schema must be a dict, "
+            f"got {type(schema).__name__}."
+        )
+
+    # Try function_schema.json_schema (pydantic-ai Tool class)
+    if hasattr(tool, "function_schema"):
+        function_schema = getattr(tool, "function_schema")
+        if hasattr(function_schema, "json_schema"):
+            schema = getattr(function_schema, "json_schema")
+            if isinstance(schema, dict):
+                return schema
+            raise ToolValidationError(
+                f"Tool '{tool_name}' function_schema.json_schema must be a dict, "
+                f"got {type(schema).__name__}."
+            )
+
+    # Try tool_def.parameters_json_schema (pydantic-ai Tool class)
+    if hasattr(tool, "tool_def"):
+        tool_def = getattr(tool, "tool_def")
+        if hasattr(tool_def, "parameters_json_schema"):
+            schema = getattr(tool_def, "parameters_json_schema")
+            if isinstance(schema, dict):
+                return schema
+            raise ToolValidationError(
+                f"Tool '{tool_name}' tool_def.parameters_json_schema must be a dict, "
+                f"got {type(schema).__name__}."
+            )
+
+    # No schema found - raise error
+    raise ToolValidationError(
+        f"Cannot extract JSON schema from tool '{tool_name}'. "
+        "Expected parameters_json_schema, function_schema.json_schema, "
+        "or tool_def.parameters_json_schema attribute."
+    )
+
+
 def extract_tools_from_toolsets(
     toolsets: Sequence[PydanticAITool] | None,
 ) -> list[ToolDefinition]:
@@ -93,7 +156,7 @@ def extract_tools_from_toolsets(
         tool_def: ToolDefinition = {
             "name": t.name,
             "description": t.description,
-            "input_schema": t.parameters_json_schema,
+            "input_schema": _get_parameters_json_schema(t),
             "function": getattr(t, "function", None),
         }
         result.append(tool_def)
