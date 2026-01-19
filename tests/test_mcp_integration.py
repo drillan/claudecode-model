@@ -9,11 +9,87 @@ from claudecode_model.mcp_integration import (
     MCP_SERVER_NAME,
     ToolDefinition,
     ToolValidationError,
+    _get_parameters_json_schema,
     convert_tool_definition,
     create_mcp_server_from_tools,
     create_tool_wrapper,
     extract_tools_from_toolsets,
 )
+
+
+class TestGetParametersJsonSchema:
+    """Tests for _get_parameters_json_schema helper function."""
+
+    def test_gets_schema_from_direct_parameters_json_schema(self) -> None:
+        """Should get schema from direct parameters_json_schema attribute."""
+        mock_tool = MagicMock()
+        mock_tool.parameters_json_schema = {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }
+
+        result = _get_parameters_json_schema(mock_tool)
+
+        assert result == {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }
+
+    def test_gets_schema_from_function_schema_json_schema(self) -> None:
+        """Should get schema from function_schema.json_schema for Tool class."""
+        mock_tool = MagicMock(spec=[])  # No default attributes
+        mock_tool.function_schema = MagicMock()
+        mock_tool.function_schema.json_schema = {
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+        }
+
+        result = _get_parameters_json_schema(mock_tool)
+
+        assert result == {
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+        }
+
+    def test_gets_schema_from_tool_def_parameters_json_schema(self) -> None:
+        """Should get schema from tool_def.parameters_json_schema for Tool class."""
+        mock_tool = MagicMock(spec=[])  # No default attributes
+        mock_tool.tool_def = MagicMock()
+        mock_tool.tool_def.parameters_json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+
+        result = _get_parameters_json_schema(mock_tool)
+
+        assert result == {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+
+    def test_raises_error_when_no_schema_found(self) -> None:
+        """Should raise ToolValidationError when no schema can be found."""
+        mock_tool = MagicMock(spec=[])  # No attributes at all
+        mock_tool.name = "broken_tool"
+
+        with pytest.raises(ToolValidationError) as exc_info:
+            _get_parameters_json_schema(mock_tool)
+
+        assert "Cannot extract JSON schema" in str(exc_info.value)
+        assert "broken_tool" in str(exc_info.value)
+
+    def test_prefers_direct_parameters_json_schema(self) -> None:
+        """Should prefer direct parameters_json_schema over other paths."""
+        mock_tool = MagicMock()
+        mock_tool.parameters_json_schema = {"direct": True}
+        mock_tool.function_schema = MagicMock()
+        mock_tool.function_schema.json_schema = {"function_schema": True}
+        mock_tool.tool_def = MagicMock()
+        mock_tool.tool_def.parameters_json_schema = {"tool_def": True}
+
+        result = _get_parameters_json_schema(mock_tool)
+
+        assert result == {"direct": True}
 
 
 class TestExtractToolsFromToolsets:
@@ -98,6 +174,48 @@ class TestExtractToolsFromToolsets:
         """Should return empty list for None toolset."""
         result = extract_tools_from_toolsets(None)
         assert result == []
+
+    def test_extracts_tools_with_function_schema_json_schema(self) -> None:
+        """Should extract tools using function_schema.json_schema path."""
+        mock_tool = MagicMock(spec=[])  # No default parameters_json_schema
+        mock_tool.name = "pydantic_ai_tool"
+        mock_tool.description = "A pydantic-ai Tool class"
+        mock_tool.function_schema = MagicMock()
+        mock_tool.function_schema.json_schema = {
+            "type": "object",
+            "properties": {"data": {"type": "string"}},
+        }
+        mock_tool.function = None
+
+        result = extract_tools_from_toolsets([mock_tool])
+
+        assert len(result) == 1
+        assert result[0]["name"] == "pydantic_ai_tool"
+        assert result[0]["input_schema"] == {
+            "type": "object",
+            "properties": {"data": {"type": "string"}},
+        }
+
+    def test_extracts_tools_with_tool_def_parameters_json_schema(self) -> None:
+        """Should extract tools using tool_def.parameters_json_schema path."""
+        mock_tool = MagicMock(spec=[])  # No default parameters_json_schema
+        mock_tool.name = "tool_via_tool_def"
+        mock_tool.description = "A tool accessed via tool_def"
+        mock_tool.tool_def = MagicMock()
+        mock_tool.tool_def.parameters_json_schema = {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+        }
+        mock_tool.function = None
+
+        result = extract_tools_from_toolsets([mock_tool])
+
+        assert len(result) == 1
+        assert result[0]["name"] == "tool_via_tool_def"
+        assert result[0]["input_schema"] == {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+        }
 
 
 class TestConvertToolDefinition:
