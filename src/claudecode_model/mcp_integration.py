@@ -81,13 +81,20 @@ def _get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
         The JSON schema dictionary for the tool's parameters.
 
     Raises:
-        ToolValidationError: If no JSON schema can be extracted from the tool.
+        ToolValidationError: If no JSON schema can be extracted from the tool,
+            or if the schema attribute exists but is not a dict.
     """
+    tool_name = getattr(tool, "name", str(tool))
+
     # Try direct parameters_json_schema attribute first
     if hasattr(tool, "parameters_json_schema"):
         schema = getattr(tool, "parameters_json_schema")
         if isinstance(schema, dict):
             return schema
+        raise ToolValidationError(
+            f"Tool '{tool_name}' parameters_json_schema must be a dict, "
+            f"got {type(schema).__name__}."
+        )
 
     # Try function_schema.json_schema (pydantic-ai Tool class)
     if hasattr(tool, "function_schema"):
@@ -96,6 +103,10 @@ def _get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
             schema = getattr(function_schema, "json_schema")
             if isinstance(schema, dict):
                 return schema
+            raise ToolValidationError(
+                f"Tool '{tool_name}' function_schema.json_schema must be a dict, "
+                f"got {type(schema).__name__}."
+            )
 
     # Try tool_def.parameters_json_schema (pydantic-ai Tool class)
     if hasattr(tool, "tool_def"):
@@ -104,9 +115,12 @@ def _get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
             schema = getattr(tool_def, "parameters_json_schema")
             if isinstance(schema, dict):
                 return schema
+            raise ToolValidationError(
+                f"Tool '{tool_name}' tool_def.parameters_json_schema must be a dict, "
+                f"got {type(schema).__name__}."
+            )
 
     # No schema found - raise error
-    tool_name = getattr(tool, "name", str(tool))
     raise ToolValidationError(
         f"Cannot extract JSON schema from tool '{tool_name}'. "
         "Expected parameters_json_schema, function_schema.json_schema, "

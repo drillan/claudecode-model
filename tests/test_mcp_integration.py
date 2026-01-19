@@ -91,6 +91,46 @@ class TestGetParametersJsonSchema:
 
         assert result == {"direct": True}
 
+    def test_raises_error_when_parameters_json_schema_is_not_dict(self) -> None:
+        """Should raise ToolValidationError when parameters_json_schema is not a dict."""
+        mock_tool = MagicMock(spec=[])
+        mock_tool.name = "invalid_tool"
+        mock_tool.parameters_json_schema = "not_a_dict"
+
+        with pytest.raises(ToolValidationError) as exc_info:
+            _get_parameters_json_schema(mock_tool)
+
+        assert "invalid_tool" in str(exc_info.value)
+        assert "must be a dict" in str(exc_info.value)
+
+    def test_raises_error_when_function_schema_json_schema_is_not_dict(self) -> None:
+        """Should raise ToolValidationError when function_schema.json_schema is not a dict."""
+        mock_tool = MagicMock(spec=[])
+        mock_tool.name = "invalid_tool"
+        mock_tool.function_schema = MagicMock()
+        mock_tool.function_schema.json_schema = ["not", "a", "dict"]
+
+        with pytest.raises(ToolValidationError) as exc_info:
+            _get_parameters_json_schema(mock_tool)
+
+        assert "invalid_tool" in str(exc_info.value)
+        assert "must be a dict" in str(exc_info.value)
+
+    def test_raises_error_when_tool_def_parameters_json_schema_is_not_dict(
+        self,
+    ) -> None:
+        """Should raise ToolValidationError when tool_def.parameters_json_schema is not a dict."""
+        mock_tool = MagicMock(spec=[])
+        mock_tool.name = "invalid_tool"
+        mock_tool.tool_def = MagicMock()
+        mock_tool.tool_def.parameters_json_schema = 12345
+
+        with pytest.raises(ToolValidationError) as exc_info:
+            _get_parameters_json_schema(mock_tool)
+
+        assert "invalid_tool" in str(exc_info.value)
+        assert "must be a dict" in str(exc_info.value)
+
 
 class TestExtractToolsFromToolsets:
     """Tests for extract_tools_from_toolsets function."""
