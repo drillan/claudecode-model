@@ -317,22 +317,15 @@ wheels = [
 [[package]]
 name = "claude-agent-sdk"
 version = "0.1.20"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fstring-prompt-mcp-transport#49ee621ec670cbc110a33b85539326612a2c9f8d" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/78/be7848b0a148269e07c3248967b4c382624967b15e9cc00351f5f7374583/claude_agent_sdk-0.1.20.tar.gz", hash = "sha256:bc3cb24f2dc8c7dc7362f52764051b20dbfcc16ec3e3d39787c4946d7ced3848", size = 56178, upload-time = "2026-01-16T21:20:11.864Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/e6/b34b8358a31cfc9c65df014d038036dbc86bd5f45ff6befc98e2cdb3407a/claude_agent_sdk-0.1.20-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3ff7ab0930fd34fd533fa6216af698df71e7c3a4fcbd2f29eb9d0cd7b51fdfa5", size = 54068867, upload-time = "2026-01-16T21:19:55.29Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/dc/08606e7a7377ca841ff6a961b0db930d13a98656b30176860c28d3407bcf/claude_agent_sdk-0.1.20-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:7756d35e6b5774270e880403513a347a9a4a504bfa28fd6a51cb0ed724a7851e", size = 68266982, upload-time = "2026-01-16T21:20:00.365Z" },
-    { url = "https://files.pythonhosted.org/packages/00/e3/d8de4f94a1c670ea4c4a933a272b291b85bd6471ac7a28875ef8ae768185/claude_agent_sdk-0.1.20-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:82dfb7d4f6494c9a977b5593773b91c507bcdd76437f289e2b8f8a91ae5f95c1", size = 69980411, upload-time = "2026-01-16T21:20:04.71Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/9f/af71db6b54e9de08e37c10e0a4d5ea7482227b15a63ee9f97b1599cd3ffc/claude_agent_sdk-0.1.20-py3-none-win_amd64.whl", hash = "sha256:7a5675b1c0bf489a5c82c79f6ad47c3915a50da66e1329dcb0d08332a04889d3", size = 72183062, upload-time = "2026-01-16T21:20:09.069Z" },
-]
 
 [[package]]
 name = "claudecode-model"
-version = "0.0.2"
+version = "0.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
@@ -350,7 +343,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", specifier = ">=0.1.20" },
+    { name = "claude-agent-sdk", git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fstring-prompt-mcp-transport" },
     { name = "dacite", specifier = ">=1.9.0" },
     { name = "pydantic-ai", specifier = ">=1.42.0" },
 ]

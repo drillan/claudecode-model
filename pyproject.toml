@@ -1,6 +1,6 @@
 [project]
 name = "claudecode-model"
-version = "0.0.3"
+version = "0.0.4"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -34,3 +34,9 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.mypy]
 exclude = ["ai_working/"]
+
+[tool.uv.sources]
+# Temporary: Use forked branch until upstream fix is merged
+# Issue: https://github.com/drillan/claudecode-model/issues/60
+# PR: https://github.com/anthropics/claude-agent-sdk-python/pull/492
+claude-agent-sdk = { git = "https://github.com/drillan/claude-agent-sdk-python.git", branch = "fix/string-prompt-mcp-transport" }
