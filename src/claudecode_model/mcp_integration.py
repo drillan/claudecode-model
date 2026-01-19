@@ -45,6 +45,20 @@ class PydanticAITool(Protocol):
     function: Callable[..., Coroutine[object, object, object]] | None
 
 
+@runtime_checkable
+class AgentToolset(Protocol):
+    """Protocol for pydantic-ai Agent toolset (e.g., _AgentFunctionToolset).
+
+    This protocol matches pydantic-ai's internal _AgentFunctionToolset structure,
+    allowing direct use of agent._function_toolset without extracting tools.
+
+    Attributes:
+        tools: Dictionary mapping tool names to PydanticAITool objects.
+    """
+
+    tools: dict[str, PydanticAITool]
+
+
 class ToolValidationError(ValueError):
     """Error raised when tool validation fails."""
 
