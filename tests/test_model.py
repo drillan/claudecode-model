@@ -2249,6 +2249,7 @@ class TestClaudeCodeModelSetAgentToolsets:
         model.set_agent_toolsets([mock_tool])
 
         assert model._agent_toolsets is not None
+        assert isinstance(model._agent_toolsets, list)
         assert len(model._agent_toolsets) == 1
 
     def test_set_agent_toolsets_creates_mcp_server(self) -> None:
@@ -2308,6 +2309,7 @@ class TestClaudeCodeModelSetAgentToolsets:
         model.set_agent_toolsets([mock_tool1, mock_tool2])
 
         assert model._agent_toolsets is not None
+        assert isinstance(model._agent_toolsets, list)
         assert len(model._agent_toolsets) == 2
 
     def test_get_mcp_servers_returns_registered_servers(self) -> None:
@@ -2445,3 +2447,255 @@ class TestBuildAgentOptionsMcpServers:
         assert captured_options[0].mcp_servers is not None
         assert isinstance(captured_options[0].mcp_servers, dict)
         assert "pydantic_tools" in captured_options[0].mcp_servers
+
+
+class TestRequestFunctionToolsProcessing:
+    """Tests for request() processing model_request_parameters.function_tools."""
+
+    @pytest.mark.asyncio
+    async def test_request_uses_function_tools_with_registered_toolsets(self) -> None:
+        """request should use function_tools to filter registered toolsets."""
+        from collections.abc import AsyncIterator
+        from unittest.mock import MagicMock
+
+        from claude_agent_sdk import ResultMessage
+        from pydantic_ai.tools import ToolDefinition
+
+        async def weather_func(city: str) -> str:
+            return f"Weather in {city}"
+
+        async def search_func(query: str) -> str:
+            return f"Search: {query}"
+
+        # Create mock toolset with tools dict (like _AgentFunctionToolset)
+        mock_toolset = MagicMock()
+        mock_weather_tool = MagicMock()
+        mock_weather_tool.name = "get_weather"
+        mock_weather_tool.description = "Get weather"
+        mock_weather_tool.parameters_json_schema = {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+        }
+        mock_weather_tool.function = weather_func
+
+        mock_search_tool = MagicMock()
+        mock_search_tool.name = "search"
+        mock_search_tool.description = "Search"
+        mock_search_tool.parameters_json_schema = {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }
+        mock_search_tool.function = search_func
+
+        mock_toolset.tools = {
+            "get_weather": mock_weather_tool,
+            "search": mock_search_tool,
+        }
+
+        model = ClaudeCodeModel()
+        model.set_agent_toolsets(mock_toolset)
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="What's the weather?")])
+        ]
+
+        # Only request get_weather tool via function_tools
+        params = ModelRequestParameters(
+            function_tools=[
+                ToolDefinition(
+                    name="get_weather",
+                    description="Get weather",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                )
+            ],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Weather response",
+        )
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        # MCP server should be created with matched tools
+        assert len(captured_options) == 1
+        assert captured_options[0].mcp_servers is not None
+        assert isinstance(captured_options[0].mcp_servers, dict)
+        assert "pydantic_tools" in captured_options[0].mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_request_warns_when_function_tools_not_found(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should log warning when function_tools not found in registered toolsets."""
+        from collections.abc import AsyncIterator
+
+        from claude_agent_sdk import ResultMessage
+        from pydantic_ai.tools import ToolDefinition
+
+        # Create empty toolset
+        model = ClaudeCodeModel()
+        model.set_agent_toolsets([])
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        # Request a tool that doesn't exist
+        params = ModelRequestParameters(
+            function_tools=[
+                ToolDefinition(
+                    name="nonexistent_tool",
+                    description="Does not exist",
+                    parameters_json_schema={"type": "object", "properties": {}},
+                )
+            ],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, None, params)
+
+        # Should warn about tool not found
+        assert "nonexistent_tool" in caplog.text or "not found" in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_request_ignores_empty_function_tools(self) -> None:
+        """request should not modify MCP servers when function_tools is empty."""
+        from collections.abc import AsyncIterator
+        from unittest.mock import MagicMock
+
+        from claude_agent_sdk import ResultMessage
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        # Register a tool
+        mock_tool = MagicMock()
+        mock_tool.name = "test_tool"
+        mock_tool.description = "Test"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model = ClaudeCodeModel()
+        model.set_agent_toolsets([mock_tool])
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        # Empty function_tools
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        # MCP servers should still contain registered tools
+        assert len(captured_options) == 1
+        assert isinstance(captured_options[0].mcp_servers, dict)
+        assert "pydantic_tools" in captured_options[0].mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_request_without_registered_toolsets_and_with_function_tools(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """request should warn when function_tools provided but no toolsets registered."""
+        from collections.abc import AsyncIterator
+
+        from claude_agent_sdk import ResultMessage
+        from pydantic_ai.tools import ToolDefinition
+
+        model = ClaudeCodeModel()
+        # No toolsets registered
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        params = ModelRequestParameters(
+            function_tools=[
+                ToolDefinition(
+                    name="some_tool",
+                    description="Some tool",
+                    parameters_json_schema={"type": "object", "properties": {}},
+                )
+            ],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with caplog.at_level(logging.WARNING):
+                await model.request(messages, None, params)
+
+        # Should warn about missing toolsets
+        assert "set_agent_toolsets" in caplog.text or "toolsets" in caplog.text.lower()

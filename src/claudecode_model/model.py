@@ -29,6 +29,7 @@ from claudecode_model.cli import (
 from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.mcp_integration import (
     MCP_SERVER_NAME,
+    AgentToolset,
     PydanticAITool,
     create_mcp_server_from_tools,
 )
@@ -42,6 +43,7 @@ from claudecode_model.types import (
 if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestParameters
     from pydantic_ai.settings import ModelSettings
+    from pydantic_ai.tools import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ class ClaudeCodeModel(Model):
         self._permission_mode = permission_mode
         self._max_turns = max_turns
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
-        self._agent_toolsets: Sequence[PydanticAITool] | None = None
+        self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
 
     @property
     def model_name(self) -> str:
@@ -454,6 +456,38 @@ class ClaudeCodeModel(Model):
         # Convert to CLIResponse for backward compatibility
         return self._result_message_to_cli_response(result)
 
+    def _process_function_tools(
+        self,
+        function_tools: list[ToolDefinition],
+    ) -> None:
+        """Process function_tools and update MCP server if needed.
+
+        Args:
+            function_tools: List of ToolDefinition from model_request_parameters.
+        """
+        if not function_tools:
+            return
+
+        # Check if toolsets are registered
+        if self._agent_toolsets is None:
+            logger.warning(
+                "function_tools provided but no toolsets registered. "
+                "Call model.set_agent_toolsets(agent._function_toolset) "
+                "after creating the Agent to enable tool support."
+            )
+            return
+
+        # Find matching tools by name
+        tool_names = [td.name for td in function_tools]
+        matched_tools = self._find_tools_by_names(tool_names)
+
+        if matched_tools:
+            # Update MCP server with matched tools only
+            self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
+                name=MCP_SERVER_NAME,
+                toolsets=matched_tools,
+            )
+
     async def request(
         self,
         messages: list[ModelMessage],
@@ -474,6 +508,9 @@ class ClaudeCodeModel(Model):
             ValueError: If no user prompt is found in messages.
             CLIExecutionError: If SDK execution fails or times out.
         """
+        # Process function_tools to update MCP server
+        self._process_function_tools(model_request_parameters.function_tools)
+
         json_schema = self._extract_json_schema(model_request_parameters)
         cli_response = await self._execute_request(
             messages, model_settings, json_schema=json_schema
@@ -526,13 +563,16 @@ class ClaudeCodeModel(Model):
             cli_response=cli_response,
         )
 
-    def set_agent_toolsets(self, toolsets: Sequence[PydanticAITool] | None) -> None:
+    def set_agent_toolsets(
+        self, toolsets: Sequence[PydanticAITool] | AgentToolset | None
+    ) -> None:
         """Register pydantic-ai Agent toolsets for MCP server exposure.
 
         Converts pydantic-ai tools to an MCP server that can be used by Claude.
 
         Args:
-            toolsets: Sequence of pydantic-ai tool objects or None.
+            toolsets: Sequence of pydantic-ai tool objects, an AgentToolset
+                (e.g., agent._function_toolset), or None.
 
         Note:
             Calling this method multiple times will overwrite the previous toolsets.
@@ -545,10 +585,57 @@ class ClaudeCodeModel(Model):
                 MCP_SERVER_NAME,
             )
         self._agent_toolsets = toolsets
+
+        # Convert AgentToolset to Sequence[PydanticAITool] for MCP server creation
+        tools_for_mcp: Sequence[PydanticAITool] | None
+        if isinstance(toolsets, AgentToolset):
+            tools_for_mcp = list(toolsets.tools.values())
+        else:
+            tools_for_mcp = toolsets
+
         self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
             name=MCP_SERVER_NAME,
-            toolsets=toolsets,
+            toolsets=tools_for_mcp,
         )
+
+    def _find_tools_by_names(
+        self,
+        tool_names: list[str],
+    ) -> list[PydanticAITool]:
+        """Find tools by name from registered toolsets.
+
+        Args:
+            tool_names: List of tool names to find.
+
+        Returns:
+            List of PydanticAITool objects that match the given names.
+            Tools not found are logged as warnings.
+        """
+        if self._agent_toolsets is None:
+            return []
+
+        found_tools: list[PydanticAITool] = []
+
+        # Build a lookup dict from registered toolsets
+        tools_dict: dict[str, PydanticAITool] = {}
+        if isinstance(self._agent_toolsets, AgentToolset):
+            tools_dict = dict(self._agent_toolsets.tools)
+        else:
+            for tool in self._agent_toolsets:
+                tools_dict[tool.name] = tool
+
+        for name in tool_names:
+            if name in tools_dict:
+                found_tools.append(tools_dict[name])
+            else:
+                logger.warning(
+                    "Tool '%s' not found in registered toolsets. "
+                    "Make sure to call model.set_agent_toolsets(agent._function_toolset) "
+                    "after registering tools with @agent.tool or @agent.tool_plain.",
+                    name,
+                )
+
+        return found_tools
 
     def get_mcp_servers(self) -> dict[str, McpSdkServerConfig]:
         """Return registered MCP servers.
