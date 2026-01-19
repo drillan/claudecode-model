@@ -81,6 +81,51 @@ class UnsupportedDepsTypeError(ClaudeCodeError):
         self.type_name = type_name
 
 
+class ToolsetNotRegisteredError(ClaudeCodeError):
+    """Raised when function_tools are provided but no toolsets are registered.
+
+    This error indicates that the user called request() or request_with_metadata()
+    with function_tools in ModelRequestParameters, but never registered toolsets
+    via model.set_agent_toolsets().
+
+    Attributes:
+        requested_tools: List of tool names that were requested.
+    """
+
+    def __init__(self, requested_tools: list[str]) -> None:
+        message = (
+            f"function_tools provided ({', '.join(requested_tools)}) "
+            "but no toolsets are registered. "
+            "Call model.set_agent_toolsets(agent._function_toolset) "
+            "after creating the Agent to enable tool support."
+        )
+        super().__init__(message)
+        self.requested_tools = requested_tools
+
+
+class ToolNotFoundError(ClaudeCodeError):
+    """Raised when requested tools are not found in registered toolsets.
+
+    This error is raised when some of the tools specified in function_tools
+    do not exist in the registered toolsets.
+
+    Attributes:
+        missing_tools: List of tool names that were not found.
+        available_tools: List of tool names that are available in registered toolsets.
+    """
+
+    def __init__(self, missing_tools: list[str], available_tools: list[str]) -> None:
+        message = (
+            f"Tools not found in registered toolsets: {', '.join(missing_tools)}. "
+            f"Available tools: {', '.join(available_tools) if available_tools else 'none'}. "
+            "Make sure to call model.set_agent_toolsets(agent._function_toolset) "
+            "after registering tools with @agent.tool or @agent.tool_plain."
+        )
+        super().__init__(message)
+        self.missing_tools = missing_tools
+        self.available_tools = available_tools
+
+
 class TypeHintResolutionError(ClaudeCodeError):
     """Raised when type hints cannot be resolved for a dataclass.
 

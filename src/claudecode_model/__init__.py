@@ -20,6 +20,8 @@ from claudecode_model.exceptions import (
     CLIResponseParseError,
     ClaudeCodeError,
     ErrorType,
+    ToolNotFoundError,
+    ToolsetNotRegisteredError,
     TypeHintResolutionError,
     UnsupportedDepsTypeError,
 )
@@ -65,6 +67,8 @@ __all__ = [
     "CLIResponseParseError",
     "UnsupportedDepsTypeError",
     "TypeHintResolutionError",
+    "ToolsetNotRegisteredError",
+    "ToolNotFoundError",
     "ErrorType",
     "RequestWithMetadataResult",
     "DEFAULT_MODEL",

@@ -26,7 +26,11 @@ from claudecode_model.cli import (
     DEFAULT_TIMEOUT_SECONDS,
     TIMEOUT_EXIT_CODE,
 )
-from claudecode_model.exceptions import CLIExecutionError
+from claudecode_model.exceptions import (
+    CLIExecutionError,
+    ToolNotFoundError,
+    ToolsetNotRegisteredError,
+)
 from claudecode_model.mcp_integration import (
     MCP_SERVER_NAME,
     AgentToolset,
@@ -71,6 +75,7 @@ class ClaudeCodeModel(Model):
         self._max_turns = max_turns
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
+        self._tools_cache: dict[str, PydanticAITool] = {}
 
     @property
     def model_name(self) -> str:
@@ -464,22 +469,34 @@ class ClaudeCodeModel(Model):
 
         Args:
             function_tools: List of ToolDefinition from model_request_parameters.
+
+        Raises:
+            ToolsetNotRegisteredError: If function_tools are provided but no
+                toolsets are registered via set_agent_toolsets().
+            ToolNotFoundError: If some of the requested tools are not found
+                in the registered toolsets.
+
+        Side Effects:
+            Updates self._mcp_servers with a new MCP server containing only
+            the matched tools from function_tools.
         """
         if not function_tools:
             return
 
+        tool_names = [td.name for td in function_tools]
+
         # Check if toolsets are registered
         if self._agent_toolsets is None:
-            logger.warning(
-                "function_tools provided but no toolsets registered. "
-                "Call model.set_agent_toolsets(agent._function_toolset) "
-                "after creating the Agent to enable tool support."
-            )
-            return
+            raise ToolsetNotRegisteredError(requested_tools=tool_names)
 
         # Find matching tools by name
-        tool_names = [td.name for td in function_tools]
-        matched_tools = self._find_tools_by_names(tool_names)
+        matched_tools, missing_tools = self._find_tools_by_names(tool_names)
+
+        if missing_tools:
+            available_tools = self._get_available_tool_names()
+            raise ToolNotFoundError(
+                missing_tools=missing_tools, available_tools=available_tools
+            )
 
         if matched_tools:
             # Update MCP server with matched tools only
@@ -554,6 +571,9 @@ class ClaudeCodeModel(Model):
             }
             ```
         """
+        # Process function_tools to update MCP server
+        self._process_function_tools(model_request_parameters.function_tools)
+
         json_schema = self._extract_json_schema(model_request_parameters)
         cli_response = await self._execute_request(
             messages, model_settings, json_schema=json_schema
@@ -586,12 +606,19 @@ class ClaudeCodeModel(Model):
             )
         self._agent_toolsets = toolsets
 
-        # Convert AgentToolset to Sequence[PydanticAITool] for MCP server creation
+        # Build tools cache for efficient lookup in _find_tools_by_names
+        self._tools_cache = {}
         tools_for_mcp: Sequence[PydanticAITool] | None
         if isinstance(toolsets, AgentToolset):
+            for name, tool in toolsets.tools.items():
+                self._tools_cache[name] = tool
             tools_for_mcp = list(toolsets.tools.values())
-        else:
+        elif toolsets is not None:
+            for tool in toolsets:
+                self._tools_cache[tool.name] = tool
             tools_for_mcp = toolsets
+        else:
+            tools_for_mcp = None
 
         self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
             name=MCP_SERVER_NAME,
@@ -601,41 +628,41 @@ class ClaudeCodeModel(Model):
     def _find_tools_by_names(
         self,
         tool_names: list[str],
-    ) -> list[PydanticAITool]:
-        """Find tools by name from registered toolsets.
+    ) -> tuple[list[PydanticAITool], list[str]]:
+        """Find tools by name from registered toolsets using cached lookup.
+
+        Uses the tools cache built during set_agent_toolsets() for O(1) lookup
+        per tool name.
 
         Args:
             tool_names: List of tool names to find.
 
         Returns:
-            List of PydanticAITool objects that match the given names.
-            Tools not found are logged as warnings.
+            A tuple of (found_tools, missing_tools):
+                - found_tools: List of PydanticAITool objects that match the given names.
+                - missing_tools: List of tool names that were not found.
         """
         if self._agent_toolsets is None:
-            return []
+            return [], list(tool_names)
 
         found_tools: list[PydanticAITool] = []
-
-        # Build a lookup dict from registered toolsets
-        tools_dict: dict[str, PydanticAITool] = {}
-        if isinstance(self._agent_toolsets, AgentToolset):
-            tools_dict = dict(self._agent_toolsets.tools)
-        else:
-            for tool in self._agent_toolsets:
-                tools_dict[tool.name] = tool
+        missing_tools: list[str] = []
 
         for name in tool_names:
-            if name in tools_dict:
-                found_tools.append(tools_dict[name])
+            if name in self._tools_cache:
+                found_tools.append(self._tools_cache[name])
             else:
-                logger.warning(
-                    "Tool '%s' not found in registered toolsets. "
-                    "Make sure to call model.set_agent_toolsets(agent._function_toolset) "
-                    "after registering tools with @agent.tool or @agent.tool_plain.",
-                    name,
-                )
+                missing_tools.append(name)
 
-        return found_tools
+        return found_tools, missing_tools
+
+    def _get_available_tool_names(self) -> list[str]:
+        """Get list of available tool names from registered toolsets.
+
+        Returns:
+            List of tool names available in the tools cache.
+        """
+        return list(self._tools_cache.keys())
 
     def get_mcp_servers(self) -> dict[str, McpSdkServerConfig]:
         """Return registered MCP servers.
