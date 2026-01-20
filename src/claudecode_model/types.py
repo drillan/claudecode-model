@@ -204,11 +204,14 @@ class CLIResponse(BaseModel):
         """Ensure at least result or structured_output has meaningful content.
 
         Prevents silent failures where both result is empty and structured_output is None.
+        Includes debug information in error message to help diagnose the issue.
         """
         if not self.result and self.structured_output is None:
             raise ValueError(
                 "Either result must be non-empty or structured_output must be provided. "
-                "Both cannot be empty/None simultaneously."
+                "Both cannot be empty/None simultaneously. "
+                f"Debug info: is_error={self.is_error}, num_turns={self.num_turns}, "
+                f"duration_ms={self.duration_ms}, subtype={self.subtype}"
             )
         return self
 
