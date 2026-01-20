@@ -2230,6 +2230,92 @@ class TestClaudeCodeModelUsageWarning:
         assert cli_response.usage.output_tokens == 50
 
 
+class TestResultMessageToCliResponseEmptyResultWarning:
+    """Tests for warning log when ResultMessage has empty result."""
+
+    def test_logs_warning_on_empty_result_and_no_structured_output(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_result_message_to_cli_response should log warning when result is empty.
+
+        When ResultMessage has empty result and no structured_output, a warning
+        should be logged with debug info (is_error, num_turns, duration_ms, subtype).
+        """
+        model = ClaudeCodeModel()
+
+        result = ResultMessage(
+            subtype="error_subtype",
+            duration_ms=5000,
+            duration_api_ms=4500,
+            is_error=True,
+            num_turns=3,
+            session_id="test-session",
+            result="",  # Empty result
+            usage={"input_tokens": 100, "output_tokens": 50},
+            structured_output=None,  # No structured output
+        )
+
+        with caplog.at_level(logging.WARNING), pytest.raises(ValueError):
+            model._result_message_to_cli_response(result)
+
+        # Verify warning was logged with debug info
+        assert "empty result" in caplog.text
+        assert "is_error=True" in caplog.text
+        assert "num_turns=3" in caplog.text
+        assert "duration_ms=5000" in caplog.text
+        assert "subtype=error_subtype" in caplog.text
+
+    def test_no_warning_when_result_is_present(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_result_message_to_cli_response should not warn when result is non-empty."""
+        model = ClaudeCodeModel()
+
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Hello, world!",  # Non-empty result
+            usage={"input_tokens": 100, "output_tokens": 50},
+            structured_output=None,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            cli_response = model._result_message_to_cli_response(result)
+
+        # Verify no warning about empty result
+        assert "empty result" not in caplog.text
+        assert cli_response.result == "Hello, world!"
+
+    def test_no_warning_when_structured_output_is_present(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_result_message_to_cli_response should not warn when structured_output exists."""
+        model = ClaudeCodeModel()
+
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="",  # Empty result but structured_output exists
+            usage={"input_tokens": 100, "output_tokens": 50},
+            structured_output={"name": "test"},  # Has structured output
+        )
+
+        with caplog.at_level(logging.WARNING):
+            cli_response = model._result_message_to_cli_response(result)
+
+        # Verify no warning about empty result
+        assert "empty result" not in caplog.text
+        assert cli_response.structured_output == {"name": "test"}
+
+
 class TestClaudeCodeModelSetAgentToolsets:
     """Tests for ClaudeCodeModel.set_agent_toolsets method."""
 

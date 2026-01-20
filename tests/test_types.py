@@ -1321,6 +1321,38 @@ class TestCLIResponseValidation:
         assert response.result == "Hello, world!"
         assert response.structured_output is None
 
+    def test_rejects_empty_result_with_debug_info(self) -> None:
+        """CLIResponse should include debug info in validation error message.
+
+        When result is empty and structured_output is None, the error message
+        should include debug information (is_error, num_turns, duration_ms, subtype)
+        to help diagnose the issue.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            CLIResponse(
+                type="result",
+                subtype="error_subtype",
+                is_error=True,
+                duration_ms=5000,
+                duration_api_ms=4500,
+                num_turns=3,
+                result="",
+                usage=CLIUsage(
+                    input_tokens=100,
+                    output_tokens=50,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                structured_output=None,
+            )
+
+        error_message = str(exc_info.value)
+        # Verify debug info is included in the error message
+        assert "is_error=True" in error_message
+        assert "num_turns=3" in error_message
+        assert "duration_ms=5000" in error_message
+        assert "subtype=error_subtype" in error_message
+
     def test_to_model_response_with_errors(self) -> None:
         """to_model_response should work when errors are present."""
         response = CLIResponse(

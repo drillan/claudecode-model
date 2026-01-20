@@ -305,6 +305,18 @@ class ClaudeCodeModel(Model):
         Returns:
             CLIResponse with equivalent data.
         """
+        # Log warning before CLIResponse validation fails,
+        # so debug info appears even if exception is caught
+        if not result.result and result.structured_output is None:
+            logger.warning(
+                "ResultMessage has empty result and no structured_output. "
+                "is_error=%s, num_turns=%s, duration_ms=%s, subtype=%s",
+                result.is_error,
+                result.num_turns,
+                result.duration_ms,
+                result.subtype,
+            )
+
         usage_data = result.usage
         if usage_data is None:
             logger.warning(
