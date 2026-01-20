@@ -1,4 +1,4 @@
-"""Shared test fixtures and helpers for claudecode_model tests."""
+"""Shared test helpers for claudecode_model tests."""
 
 from claude_agent_sdk import ResultMessage
 
