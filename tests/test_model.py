@@ -2255,13 +2255,8 @@ class TestResultMessageToCliResponseEmptyResultWarning:
             structured_output=None,  # No structured output
         )
 
-        with caplog.at_level(logging.WARNING):
-            # This will raise ValidationError due to empty result,
-            # but warning should be logged first
-            try:
-                model._result_message_to_cli_response(result)
-            except Exception:
-                pass  # Expected to fail validation
+        with caplog.at_level(logging.WARNING), pytest.raises(ValueError):
+            model._result_message_to_cli_response(result)
 
         # Verify warning was logged with debug info
         assert "empty result" in caplog.text
