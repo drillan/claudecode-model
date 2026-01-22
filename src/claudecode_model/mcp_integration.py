@@ -160,6 +160,14 @@ def extract_tools_from_toolsets(
             "function": getattr(t, "function", None),
         }
         result.append(tool_def)
+
+    extracted_names = [td["name"] for td in result]
+    logger.debug(
+        "extract_tools_from_toolsets: extracted %d tools, names=%s",
+        len(result),
+        extracted_names,
+    )
+
     return result
 
 
@@ -254,6 +262,13 @@ def create_mcp_server_from_tools(
     """
     tool_defs = extract_tools_from_toolsets(toolsets)
     sdk_tools = [convert_tool_definition(td) for td in tool_defs]
+
+    logger.debug(
+        "create_mcp_server_from_tools: name=%s, version=%s, num_tools=%d",
+        name,
+        version,
+        len(sdk_tools),
+    )
 
     return create_sdk_mcp_server(
         name=name,

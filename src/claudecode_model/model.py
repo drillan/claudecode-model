@@ -77,6 +77,19 @@ class ClaudeCodeModel(Model):
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
 
+        logger.debug(
+            "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
+            "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
+            "permission_mode=%s, max_turns=%s",
+            self._model_name,
+            self._working_directory,
+            self._timeout,
+            self._allowed_tools,
+            self._disallowed_tools,
+            self._permission_mode,
+            self._max_turns,
+        )
+
     @property
     def model_name(self) -> str:
         """Return the model name."""
@@ -248,6 +261,15 @@ class ClaudeCodeModel(Model):
         Raises:
             CLIExecutionError: If timeout occurs or no ResultMessage is received.
         """
+        logger.debug(
+            "_execute_sdk_query started: prompt_length=%d, timeout=%s, "
+            "model=%s, max_turns=%s",
+            len(prompt),
+            timeout,
+            options.model,
+            options.max_turns,
+        )
+
         result_message: ResultMessage | None = None
 
         async def run_query() -> ResultMessage:
@@ -276,7 +298,17 @@ class ClaudeCodeModel(Model):
 
         # Use anyio.move_on_after for timeout handling
         with anyio.move_on_after(timeout) as cancel_scope:
-            return await run_query()
+            result = await run_query()
+            logger.debug(
+                "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
+                "is_error=%s, input_tokens=%d, output_tokens=%d",
+                result.num_turns,
+                result.duration_ms,
+                result.is_error,
+                result.usage.get("input_tokens", 0) if result.usage else 0,
+                result.usage.get("output_tokens", 0) if result.usage else 0,
+            )
+            return result
 
         if cancel_scope.cancelled_caught:
             raise CLIExecutionError(
@@ -367,6 +399,14 @@ class ClaudeCodeModel(Model):
             ValueError: If no user prompt is found in messages.
             CLIExecutionError: If SDK execution fails or times out.
         """
+        logger.debug(
+            "_execute_request started: num_messages=%d, has_model_settings=%s, "
+            "has_json_schema=%s",
+            len(messages),
+            model_settings is not None,
+            json_schema is not None,
+        )
+
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
 
@@ -471,7 +511,17 @@ class ClaudeCodeModel(Model):
             )
 
         # Convert to CLIResponse for backward compatibility
-        return self._result_message_to_cli_response(result)
+        cli_response = self._result_message_to_cli_response(result)
+
+        logger.debug(
+            "_execute_request completed: duration_ms=%s, num_turns=%s, "
+            "has_structured_output=%s",
+            cli_response.duration_ms,
+            cli_response.num_turns,
+            cli_response.structured_output is not None,
+        )
+
+        return cli_response
 
     def _process_function_tools(
         self,
@@ -496,6 +546,12 @@ class ClaudeCodeModel(Model):
             return
 
         tool_names = [td.name for td in function_tools]
+
+        logger.debug(
+            "_process_function_tools: num_tools=%d, tool_names=%s",
+            len(tool_names),
+            tool_names,
+        )
 
         # Check if toolsets are registered
         if self._agent_toolsets is None:
@@ -635,6 +691,13 @@ class ClaudeCodeModel(Model):
         self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
             name=MCP_SERVER_NAME,
             toolsets=tools_for_mcp,
+        )
+
+        registered_names = list(self._tools_cache.keys())
+        logger.debug(
+            "set_agent_toolsets: registered %d tools, tool_names=%s",
+            len(registered_names),
+            registered_names,
         )
 
     def _find_tools_by_names(
