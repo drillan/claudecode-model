@@ -8,7 +8,8 @@ import warnings
 # Users can set CLAUDECODE_MODEL_LOG_LEVEL to DEBUG, INFO, WARNING, ERROR, or CRITICAL
 # Default is WARNING (suppresses debug/info logs)
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_log_level_str = os.getenv("CLAUDECODE_MODEL_LOG_LEVEL", "WARNING").upper()
+_log_level_env = os.getenv("CLAUDECODE_MODEL_LOG_LEVEL")
+_log_level_str = (_log_level_env or "WARNING").upper()
 
 if _log_level_str not in _VALID_LOG_LEVELS:
     warnings.warn(
@@ -18,7 +19,16 @@ if _log_level_str not in _VALID_LOG_LEVELS:
     )
     _log_level_str = "WARNING"
 
-logging.getLogger("claudecode_model").setLevel(getattr(logging, _log_level_str))
+_logger = logging.getLogger("claudecode_model")
+_logger.setLevel(getattr(logging, _log_level_str))
+
+# Add handler only when env var is explicitly set
+if _log_level_env is not None and not _logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    _logger.addHandler(_handler)
 
 from claudecode_model.cli import (  # noqa: E402
     DEFAULT_MODEL,
