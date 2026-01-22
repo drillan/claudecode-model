@@ -17,42 +17,47 @@ if TYPE_CHECKING:
     from pytest import LogCaptureFixture
 
 
+@pytest.fixture
+def restore_modules() -> Generator[None, None, None]:
+    """Save and restore module state to prevent test pollution.
+
+    Tests that remove claudecode_model modules from sys.modules and re-import
+    them should use this fixture to ensure original modules are restored
+    after each test so other tests' mocks work correctly.
+    """
+    import sys
+    from types import ModuleType
+
+    # Save original module state
+    original_modules: dict[str, ModuleType] = {
+        key: mod
+        for key, mod in sys.modules.items()
+        if key.startswith("claudecode_model")
+    }
+
+    yield
+
+    # Remove any modules added during the test
+    modules_to_remove = [
+        key for key in sys.modules if key.startswith("claudecode_model")
+    ]
+    for mod in modules_to_remove:
+        del sys.modules[mod]
+
+    # Restore original modules
+    sys.modules.update(original_modules)
+
+    # Clear handlers added during the test
+    logger = logging.getLogger("claudecode_model")
+    logger.handlers.clear()
+
+
 class TestLogLevelConfiguration:
     """Tests for CLAUDECODE_MODEL_LOG_LEVEL environment variable."""
 
     @pytest.fixture(autouse=True)
-    def restore_modules(self) -> Generator[None, None, None]:
-        """Save and restore module state to prevent test pollution.
-
-        Tests in this class remove claudecode_model modules from sys.modules
-        and re-import them. This fixture ensures the original modules are
-        restored after each test so other tests' mocks work correctly.
-        """
-        import sys
-        from types import ModuleType
-
-        # Save original module state
-        original_modules: dict[str, ModuleType] = {
-            key: mod
-            for key, mod in sys.modules.items()
-            if key.startswith("claudecode_model")
-        }
-
-        yield
-
-        # Remove any modules added during the test
-        modules_to_remove = [
-            key for key in sys.modules if key.startswith("claudecode_model")
-        ]
-        for mod in modules_to_remove:
-            del sys.modules[mod]
-
-        # Restore original modules
-        sys.modules.update(original_modules)
-
-        # Clear handlers added during the test
-        logger = logging.getLogger("claudecode_model")
-        logger.handlers.clear()
+    def _restore_modules(self, restore_modules: None) -> None:
+        """Auto-use the shared restore_modules fixture."""
 
     def test_log_level_set_from_env_debug(
         self, monkeypatch: pytest.MonkeyPatch
@@ -500,38 +505,8 @@ class TestLogHandlerConfiguration:
     """Tests for StreamHandler configuration."""
 
     @pytest.fixture(autouse=True)
-    def restore_modules(self) -> Generator[None, None, None]:
-        """Save and restore module state to prevent test pollution.
-
-        Tests in this class remove claudecode_model modules from sys.modules
-        and re-import them. This fixture ensures the original modules are
-        restored after each test so other tests' mocks work correctly.
-        """
-        import sys
-        from types import ModuleType
-
-        # Save original module state
-        original_modules: dict[str, ModuleType] = {
-            key: mod
-            for key, mod in sys.modules.items()
-            if key.startswith("claudecode_model")
-        }
-
-        yield
-
-        # Remove any modules added during the test
-        modules_to_remove = [
-            key for key in sys.modules if key.startswith("claudecode_model")
-        ]
-        for mod in modules_to_remove:
-            del sys.modules[mod]
-
-        # Restore original modules
-        sys.modules.update(original_modules)
-
-        # Clear handlers added during the test
-        logger = logging.getLogger("claudecode_model")
-        logger.handlers.clear()
+    def _restore_modules(self, restore_modules: None) -> None:
+        """Auto-use the shared restore_modules fixture."""
 
     def test_handler_added_when_env_var_set(
         self, monkeypatch: pytest.MonkeyPatch
@@ -641,6 +616,39 @@ class TestLogHandlerConfiguration:
         logger = logging.getLogger("claudecode_model")
         # Should still have only one handler
         assert len(logger.handlers) == 1
+
+    def test_handler_added_when_env_var_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Handler is added when CLAUDECODE_MODEL_LOG_LEVEL is empty string.
+
+        An empty string is considered "explicitly set" (not None), so a handler
+        is added. The empty string is falsy, so it falls back to "WARNING" via
+        the `(_log_level_env or "WARNING")` expression (no warning emitted).
+        """
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "")
+
+        import claudecode_model  # noqa: F401
+
+        logger = logging.getLogger("claudecode_model")
+        # Handler should be added because env var was explicitly set (even if empty)
+        assert len(logger.handlers) == 1
+        assert isinstance(logger.handlers[0], logging.StreamHandler)
+        # Level should be WARNING (empty string is falsy, falls back to WARNING)
+        assert logger.level == logging.WARNING
 
 
 class TestCLILogging:

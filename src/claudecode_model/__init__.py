@@ -22,7 +22,8 @@ if _log_level_str not in _VALID_LOG_LEVELS:
 _logger = logging.getLogger("claudecode_model")
 _logger.setLevel(getattr(logging, _log_level_str))
 
-# Add handler only when env var is explicitly set
+# Add handler only when env var is explicitly set and no handler exists yet
+# (prevents duplicate handlers on module reload)
 if _log_level_env is not None and not _logger.handlers:
     _handler = logging.StreamHandler()
     _handler.setFormatter(
