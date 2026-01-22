@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-
 from claudecode_model.types import JsonValue
 
 
@@ -71,27 +70,34 @@ def extract_json(text: str) -> dict[str, JsonValue]:
     )
 
 
-def _find_json_object(
-    text: str, failures: list[str] | None = None
-) -> dict[str, JsonValue] | None:
-    """Find and parse the first JSON object {...} in text.
+def _find_json_structure(
+    text: str,
+    start_char: str,
+    end_char: str,
+    pattern_name: str,
+    failures: list[str] | None = None,
+) -> dict[str, JsonValue] | list[JsonValue] | None:
+    """Find and parse the first JSON structure in text.
 
-    Uses bracket counting to handle nested objects and tracks string context
-    to correctly handle braces inside strings.
+    Uses bracket counting to handle nested structures and tracks string context
+    to correctly handle brackets/braces inside strings.
 
     Args:
         text: Text to search
+        start_char: Opening character ('{' for objects, '[' for arrays)
+        end_char: Closing character ('}' for objects, ']' for arrays)
+        pattern_name: Name for error messages ('object' or 'array')
         failures: Optional list to append failure reasons to
 
     Returns:
-        Parsed JSON dict or None if not found
+        Parsed JSON structure or None if not found
     """
-    found_brace = False
+    found_start = False
     last_error: str | None = None
 
     for i, char in enumerate(text):
-        if char == "{":
-            found_brace = True
+        if char == start_char:
+            found_start = True
             depth = 1
             in_string = False
             escape_next = False
@@ -114,28 +120,49 @@ def _find_json_object(
                 if in_string:
                     continue
 
-                if c == "{":
+                if c == start_char:
                     depth += 1
-                elif c == "}":
+                elif c == end_char:
                     depth -= 1
                     if depth == 0:
                         try:
                             return json.loads(text[i : j + 1])
                         except json.JSONDecodeError as e:
                             last_error = str(e)
-                            # Continue searching for next object
+                            # Continue searching for next structure
                             break
-            # If we get here without returning, this { didn't lead to valid JSON
-            # Continue to find next {
+            # If we get here without returning, this start_char didn't lead to valid JSON
+            # Continue to find next start_char
 
     if failures is not None:
-        if not found_brace:
-            failures.append("object pattern: no '{' found")
+        if not found_start:
+            failures.append(f"{pattern_name} pattern: no '{start_char}' found")
         elif last_error:
-            failures.append(f"object pattern: {last_error}")
+            failures.append(f"{pattern_name} pattern: {last_error}")
         else:
-            failures.append("object pattern: unclosed or invalid structure")
+            failures.append(f"{pattern_name} pattern: unclosed or invalid structure")
 
+    return None
+
+
+def _find_json_object(
+    text: str, failures: list[str] | None = None
+) -> dict[str, JsonValue] | None:
+    """Find and parse the first JSON object {...} in text.
+
+    Args:
+        text: Text to search for JSON object
+        failures: Optional list to append failure reasons to
+
+    Returns:
+        Parsed JSON object or None if not found
+    """
+    result = _find_json_structure(text, "{", "}", "object", failures)
+    if result is not None:
+        if isinstance(result, dict):
+            return result
+        if failures is not None:
+            failures.append("object pattern: found structure but not a dict")
     return None
 
 
@@ -144,64 +171,17 @@ def _find_json_array(
 ) -> list[JsonValue] | None:
     """Find and parse the first JSON array [...] in text.
 
-    Uses bracket counting to handle nested arrays and tracks string context
-    to correctly handle brackets inside strings.
-
     Args:
-        text: Text to search
+        text: Text to search for JSON array
         failures: Optional list to append failure reasons to
 
     Returns:
-        Parsed JSON list or None if not found
+        Parsed JSON array or None if not found
     """
-    found_bracket = False
-    last_error: str | None = None
-
-    for i, char in enumerate(text):
-        if char == "[":
-            found_bracket = True
-            depth = 1
-            in_string = False
-            escape_next = False
-
-            for j in range(i + 1, len(text)):
-                c = text[j]
-
-                if escape_next:
-                    escape_next = False
-                    continue
-
-                if c == "\\":
-                    escape_next = True
-                    continue
-
-                if c == '"' and not escape_next:
-                    in_string = not in_string
-                    continue
-
-                if in_string:
-                    continue
-
-                if c == "[":
-                    depth += 1
-                elif c == "]":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(text[i : j + 1])
-                        except json.JSONDecodeError as e:
-                            last_error = str(e)
-                            # Continue searching for next array
-                            break
-            # If we get here without returning, this [ didn't lead to valid JSON
-            # Continue to find next [
-
-    if failures is not None:
-        if not found_bracket:
-            failures.append("array pattern: no '[' found")
-        elif last_error:
-            failures.append(f"array pattern: {last_error}")
-        else:
-            failures.append("array pattern: unclosed or invalid structure")
-
+    result = _find_json_structure(text, "[", "]", "array", failures)
+    if result is not None:
+        if isinstance(result, list):
+            return result
+        if failures is not None:
+            failures.append("array pattern: found structure but not a list")
     return None
