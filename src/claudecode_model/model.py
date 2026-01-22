@@ -329,7 +329,10 @@ class ClaudeCodeModel(Model):
         )
 
     def _result_message_to_cli_response(self, result: ResultMessage) -> CLIResponse:
-        """Convert ResultMessage to CLIResponse for backward compatibility.
+        """Convert ResultMessage to CLIResponse.
+
+        CLIResponse provides detailed metadata (model_usage, permission_denials, etc.)
+        that is exposed via RequestWithMetadataResult API.
 
         Args:
             result: ResultMessage from Claude Agent SDK.
@@ -510,7 +513,7 @@ class ClaudeCodeModel(Model):
                 recoverable=False,
             )
 
-        # Convert to CLIResponse for backward compatibility
+        # Convert to CLIResponse which provides detailed metadata for public API
         cli_response = self._result_message_to_cli_response(result)
 
         logger.debug(
