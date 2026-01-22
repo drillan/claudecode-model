@@ -2,7 +2,10 @@
 
 import pytest
 
-from claudecode_model.json_utils import extract_json
+from claudecode_model.json_utils import (
+    _find_json_structure,
+    extract_json,
+)
 
 
 class TestExtractJsonDirectParse:
@@ -216,3 +219,49 @@ class TestExtractJsonEdgeCases:
         text = "[]"
         result = extract_json(text)
         assert result == {"value": []}
+
+
+class TestFindJsonStructureInternal:
+    """Tests for internal _find_json_structure function."""
+
+    def test_find_object_basic(self) -> None:
+        """Test finding basic JSON object."""
+        text = 'Some text {"key": "value"} more text'
+        result = _find_json_structure(text, "{", "}", "object")
+        assert result == {"key": "value"}
+
+    def test_find_array_basic(self) -> None:
+        """Test finding basic JSON array."""
+        text = "Some text [1, 2, 3] more text"
+        result = _find_json_structure(text, "[", "]", "array")
+        assert result == [1, 2, 3]
+
+    def test_find_nested_structure(self) -> None:
+        """Test finding nested structures."""
+        text = 'Output: {"outer": {"inner": {"deep": 1}}}'
+        result = _find_json_structure(text, "{", "}", "object")
+        assert result == {"outer": {"inner": {"deep": 1}}}
+
+    def test_find_with_escaped_quotes(self) -> None:
+        """Test handling escaped quotes in strings."""
+        text = r'Data: {"text": "He said \"hello\""}'
+        result = _find_json_structure(text, "{", "}", "object")
+        assert result == {"text": 'He said "hello"'}
+
+    def test_find_no_structure_found(self) -> None:
+        """Test failure message when no structure found."""
+        text = "No JSON here"
+        failures: list[str] = []
+        result = _find_json_structure(text, "{", "}", "object", failures)
+        assert result is None
+        assert len(failures) == 1
+        assert "object pattern: no '{' found" in failures[0]
+
+    def test_find_unclosed_structure(self) -> None:
+        """Test failure message for unclosed structure."""
+        text = '{"unclosed": true'
+        failures: list[str] = []
+        result = _find_json_structure(text, "{", "}", "object", failures)
+        assert result is None
+        assert len(failures) == 1
+        assert "object pattern: unclosed or invalid structure" in failures[0]
