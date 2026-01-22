@@ -77,6 +77,36 @@ class TestLogLevelConfiguration:
         logger = logging.getLogger("claudecode_model")
         assert logger.level == logging.WARNING
 
+    def test_log_level_invalid_value_falls_back_to_warning_with_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that invalid log level falls back to WARNING and emits a warning."""
+        import sys
+        import warnings
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "INVALID_LEVEL")
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            import claudecode_model  # noqa: F401
+
+            # Verify warning was emitted
+            assert len(w) == 1
+            assert "Invalid CLAUDECODE_MODEL_LOG_LEVEL" in str(w[0].message)
+            assert "INVALID_LEVEL" in str(w[0].message)
+            assert "Using WARNING" in str(w[0].message)
+
+        # Verify fallback to WARNING
+        logger = logging.getLogger("claudecode_model")
+        assert logger.level == logging.WARNING
+
 
 class TestModelLogging:
     """Tests for debug logging in model.py."""

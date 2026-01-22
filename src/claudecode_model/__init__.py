@@ -2,13 +2,23 @@
 
 import logging
 import os
+import warnings
 
 # Configure log level from environment variable
-# Users can set CLAUDECODE_MODEL_LOG_LEVEL=DEBUG to enable debug logging
-_log_level = os.getenv("CLAUDECODE_MODEL_LOG_LEVEL", "WARNING").upper()
-logging.getLogger("claudecode_model").setLevel(
-    getattr(logging, _log_level, logging.WARNING)
-)
+# Users can set CLAUDECODE_MODEL_LOG_LEVEL to DEBUG, INFO, WARNING, ERROR, or CRITICAL
+# Default is WARNING (suppresses debug/info logs)
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+_log_level_str = os.getenv("CLAUDECODE_MODEL_LOG_LEVEL", "WARNING").upper()
+
+if _log_level_str not in _VALID_LOG_LEVELS:
+    warnings.warn(
+        f"Invalid CLAUDECODE_MODEL_LOG_LEVEL='{_log_level_str}'. "
+        f"Valid values: DEBUG, INFO, WARNING, ERROR, CRITICAL. Using WARNING.",
+        stacklevel=1,
+    )
+    _log_level_str = "WARNING"
+
+logging.getLogger("claudecode_model").setLevel(getattr(logging, _log_level_str))
 
 from claudecode_model.cli import (  # noqa: E402
     DEFAULT_MODEL,
