@@ -7,6 +7,7 @@ CLAUDECODE_MODEL_LOG_LEVEL=DEBUG environment variable for troubleshooting.
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,8 +17,47 @@ if TYPE_CHECKING:
     from pytest import LogCaptureFixture
 
 
+@pytest.fixture
+def restore_modules() -> Generator[None, None, None]:
+    """Save and restore module state to prevent test pollution.
+
+    Tests that remove claudecode_model modules from sys.modules and re-import
+    them should use this fixture to ensure original modules are restored
+    after each test so other tests' mocks work correctly.
+    """
+    import sys
+    from types import ModuleType
+
+    # Save original module state
+    original_modules: dict[str, ModuleType] = {
+        key: mod
+        for key, mod in sys.modules.items()
+        if key.startswith("claudecode_model")
+    }
+
+    yield
+
+    # Remove any modules added during the test
+    modules_to_remove = [
+        key for key in sys.modules if key.startswith("claudecode_model")
+    ]
+    for mod in modules_to_remove:
+        del sys.modules[mod]
+
+    # Restore original modules
+    sys.modules.update(original_modules)
+
+    # Clear handlers added during the test
+    logger = logging.getLogger("claudecode_model")
+    logger.handlers.clear()
+
+
 class TestLogLevelConfiguration:
     """Tests for CLAUDECODE_MODEL_LOG_LEVEL environment variable."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_modules(self, restore_modules: None) -> None:
+        """Auto-use the shared restore_modules fixture."""
 
     def test_log_level_set_from_env_debug(
         self, monkeypatch: pytest.MonkeyPatch
@@ -459,6 +499,156 @@ class TestMcpIntegrationLogging:
         ), (
             f"Expected server creation log not found. Records: {[r.message for r in caplog.records]}"
         )
+
+
+class TestLogHandlerConfiguration:
+    """Tests for StreamHandler configuration."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_modules(self, restore_modules: None) -> None:
+        """Auto-use the shared restore_modules fixture."""
+
+    def test_handler_added_when_env_var_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Handler is added when CLAUDECODE_MODEL_LOG_LEVEL is explicitly set."""
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "DEBUG")
+
+        import claudecode_model  # noqa: F401
+
+        logger = logging.getLogger("claudecode_model")
+        assert len(logger.handlers) == 1
+        assert isinstance(logger.handlers[0], logging.StreamHandler)
+
+    def test_no_handler_when_env_var_not_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No handler added when env var is not set (default behavior)."""
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.delenv("CLAUDECODE_MODEL_LOG_LEVEL", raising=False)
+
+        import claudecode_model  # noqa: F401
+
+        logger = logging.getLogger("claudecode_model")
+        assert len(logger.handlers) == 0
+
+    def test_handler_format_correct(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Handler uses correct format."""
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "INFO")
+
+        import claudecode_model  # noqa: F401
+
+        logger = logging.getLogger("claudecode_model")
+        assert len(logger.handlers) == 1
+        handler = logger.handlers[0]
+        assert handler.formatter is not None
+        # Check format string contains expected components
+        format_str = handler.formatter._fmt
+        assert format_str is not None
+        assert "%(asctime)s" in format_str
+        assert "%(name)s" in format_str
+        assert "%(levelname)s" in format_str
+        assert "%(message)s" in format_str
+
+    def test_no_duplicate_handlers_on_reimport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple imports don't add duplicate handlers."""
+        import importlib
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "DEBUG")
+
+        import claudecode_model
+
+        # Force reload to simulate multiple imports
+        importlib.reload(claudecode_model)
+
+        logger = logging.getLogger("claudecode_model")
+        # Should still have only one handler
+        assert len(logger.handlers) == 1
+
+    def test_handler_added_when_env_var_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Handler is added when CLAUDECODE_MODEL_LOG_LEVEL is empty string.
+
+        An empty string is considered "explicitly set" (not None), so a handler
+        is added. The empty string is falsy, so it falls back to "WARNING" via
+        the `(_log_level_env or "WARNING")` expression (no warning emitted).
+        """
+        import sys
+
+        # Remove cached module to force re-import
+        modules_to_remove = [
+            key for key in sys.modules if key.startswith("claudecode_model")
+        ]
+        for mod in modules_to_remove:
+            del sys.modules[mod]
+
+        # Clear existing handlers on the logger
+        logger = logging.getLogger("claudecode_model")
+        logger.handlers.clear()
+
+        monkeypatch.setenv("CLAUDECODE_MODEL_LOG_LEVEL", "")
+
+        import claudecode_model  # noqa: F401
+
+        logger = logging.getLogger("claudecode_model")
+        # Handler should be added because env var was explicitly set (even if empty)
+        assert len(logger.handlers) == 1
+        assert isinstance(logger.handlers[0], logging.StreamHandler)
+        # Level should be WARNING (empty string is falsy, falls back to WARNING)
+        assert logger.level == logging.WARNING
 
 
 class TestCLILogging:
