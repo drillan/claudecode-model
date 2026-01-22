@@ -143,6 +143,17 @@ class ClaudeCodeCLI:
 
         cmd.append("--")  # End of options marker
         cmd.append(prompt)
+
+        logger.debug(
+            "_build_command: model=%s, permission_mode=%s, has_json_schema=%s, "
+            "max_turns=%s, prompt_length=%d",
+            self.model,
+            self.permission_mode,
+            self.json_schema is not None,
+            effective_max_turns,
+            len(prompt),
+        )
+
         return cmd
 
     async def execute(self, prompt: str) -> CLIResponse:
@@ -261,5 +272,14 @@ class ClaudeCodeCLI:
                 "CLI response contains validation errors (--json-schema mode): %s",
                 response.errors,
             )
+
+        logger.debug(
+            "execute completed: duration_ms=%s, num_turns=%s, result_length=%d, "
+            "has_structured_output=%s",
+            response.duration_ms,
+            response.num_turns,
+            len(response.result) if response.result else 0,
+            response.structured_output is not None,
+        )
 
         return response
