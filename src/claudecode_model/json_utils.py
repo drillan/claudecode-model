@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TypeVar
-
 from claudecode_model.types import JsonValue
-
-T = TypeVar("T", dict[str, JsonValue], list[JsonValue])
 
 
 def extract_json(text: str) -> dict[str, JsonValue]:
@@ -80,7 +76,7 @@ def _find_json_structure(
     end_char: str,
     pattern_name: str,
     failures: list[str] | None = None,
-) -> T | None:
+) -> dict[str, JsonValue] | list[JsonValue] | None:
     """Find and parse the first JSON structure in text.
 
     Uses bracket counting to handle nested structures and tracks string context
@@ -152,18 +148,40 @@ def _find_json_structure(
 def _find_json_object(
     text: str, failures: list[str] | None = None
 ) -> dict[str, JsonValue] | None:
-    """Find and parse the first JSON object {...} in text."""
+    """Find and parse the first JSON object {...} in text.
+
+    Args:
+        text: Text to search for JSON object
+        failures: Optional list to append failure reasons to
+
+    Returns:
+        Parsed JSON object or None if not found
+    """
     result = _find_json_structure(text, "{", "}", "object", failures)
-    if result is not None and isinstance(result, dict):
-        return result
+    if result is not None:
+        if isinstance(result, dict):
+            return result
+        if failures is not None:
+            failures.append("object pattern: found structure but not a dict")
     return None
 
 
 def _find_json_array(
     text: str, failures: list[str] | None = None
 ) -> list[JsonValue] | None:
-    """Find and parse the first JSON array [...] in text."""
+    """Find and parse the first JSON array [...] in text.
+
+    Args:
+        text: Text to search for JSON array
+        failures: Optional list to append failure reasons to
+
+    Returns:
+        Parsed JSON array or None if not found
+    """
     result = _find_json_structure(text, "[", "]", "array", failures)
-    if result is not None and isinstance(result, list):
-        return result
+    if result is not None:
+        if isinstance(result, list):
+            return result
+        if failures is not None:
+            failures.append("array pattern: found structure but not a list")
     return None
