@@ -422,3 +422,119 @@ class TestClaudeCodeModelExtractJsonSchema:
 
         result = model._extract_json_schema(params)
         assert result is None
+
+
+class TestParametersWrapperUnwrap:
+    """Tests for automatic unwrapping of {"parameters": {...}} format.
+
+    Claude Code CLI sometimes wraps structured output in a parameters envelope.
+    This test class verifies that _try_unwrap_parameters_wrapper correctly
+    detects and unwraps this format when appropriate.
+    """
+
+    def test_unwraps_parameters_wrapper_when_structured_output_is_none(
+        self,
+    ) -> None:
+        """Should unwrap {"parameters": {...}} when structured_output is None."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": {"name": "test", "score": 95}}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"name": "test", "score": 95}
+
+    def test_does_not_unwrap_when_structured_output_is_present(self) -> None:
+        """Should NOT unwrap when structured_output is already present."""
+        model = ClaudeCodeModel()
+        existing_output: dict[str, object] = {"existing": "value"}
+        result_message = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            structured_output=existing_output,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None  # Should not unwrap
+
+    def test_does_not_unwrap_non_parameters_json(self) -> None:
+        """Should NOT unwrap JSON that doesn't have 'parameters' as single key."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"name": "test", "score": 95}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_does_not_unwrap_invalid_json(self) -> None:
+        """Should NOT unwrap non-JSON result strings."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result="This is not JSON",
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_does_not_unwrap_parameters_with_extra_keys(self) -> None:
+        """Should NOT unwrap when there are keys besides 'parameters'."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": {"name": "test"}, "extra": "key"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_does_not_unwrap_non_dict_parameters(self) -> None:
+        """Should NOT unwrap when 'parameters' value is not a dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": ["list", "value"]}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_does_not_unwrap_empty_result(self) -> None:
+        """Should NOT unwrap when result is empty."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result="",
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_warning_log_includes_session_info(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log warning with session_id when unwrapping."""
+        import logging
+
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            structured_output=None,
+            session_id="test-session-123",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="claudecode_model.model"):
+            model._try_unwrap_parameters_wrapper(result_message)
+
+        assert len(caplog.records) == 1
+        assert "parameters" in caplog.records[0].message.lower()
+        assert "test-session-123" in caplog.records[0].message

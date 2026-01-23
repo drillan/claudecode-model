@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable, Sequence
 from functools import cached_property
@@ -329,6 +330,55 @@ class ClaudeCodeModel(Model):
             recoverable=False,
         )
 
+    def _try_unwrap_parameters_wrapper(
+        self, result: ResultMessage
+    ) -> dict[str, JsonValue] | None:
+        """Try to unwrap {"parameters": {...}} format from result string.
+
+        Some models wrap structured output in a parameters envelope. This method
+        detects and unwraps this format when structured_output is not already set.
+
+        Args:
+            result: ResultMessage from Claude Agent SDK.
+
+        Returns:
+            Unwrapped dict if parameters wrapper detected, None otherwise.
+        """
+        # Only process if structured_output is not already set
+        if result.structured_output is not None:
+            return None
+
+        # Only process if result is a non-empty string
+        if not result.result:
+            return None
+
+        # Try to parse as JSON
+        try:
+            parsed = json.loads(result.result)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        # Check for {"parameters": {...}} format (single key)
+        if not isinstance(parsed, dict):
+            return None
+
+        if list(parsed.keys()) != ["parameters"]:
+            return None
+
+        parameters_value = parsed["parameters"]
+        if not isinstance(parameters_value, dict):
+            return None
+
+        # Log warning about automatic unwrapping
+        logger.warning(
+            "Detected and unwrapped parameters wrapper in result. "
+            "session_id=%s, num_turns=%s",
+            result.session_id,
+            result.num_turns,
+        )
+
+        return parameters_value
+
     def _result_message_to_cli_response(self, result: ResultMessage) -> CLIResponse:
         """Convert ResultMessage to CLIResponse.
 
@@ -360,6 +410,13 @@ class ClaudeCodeModel(Model):
             )
             usage_data = {}
 
+        # Try to unwrap parameters wrapper if structured_output is not set
+        structured_output = result.structured_output
+        if structured_output is None:
+            unwrapped = self._try_unwrap_parameters_wrapper(result)
+            if unwrapped is not None:
+                structured_output = unwrapped
+
         return CLIResponse(
             type="result",
             subtype=result.subtype,
@@ -378,7 +435,7 @@ class ClaudeCodeModel(Model):
                 ),
                 cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
             ),
-            structured_output=result.structured_output,
+            structured_output=structured_output,
         )
 
     async def _execute_request(
