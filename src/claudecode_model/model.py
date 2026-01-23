@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-from claude_agent_sdk.types import McpSdkServerConfig
+from claude_agent_sdk.types import McpSdkServerConfig, Message
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -43,6 +44,7 @@ from claudecode_model.types import (
     CLIResponse,
     CLIUsage,
     JsonValue,
+    MessageCallbackType,
     RequestWithMetadataResult,
 )
 
@@ -52,6 +54,16 @@ if TYPE_CHECKING:
     from pydantic_ai.tools import ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+class _ExtractedSettings(NamedTuple):
+    """Internal container for extracted model settings."""
+
+    timeout: float
+    max_budget_usd: float | None
+    append_system_prompt: str | None
+    max_turns: int | None
+    working_directory: str | None
 
 
 class ClaudeCodeModel(Model):
@@ -67,6 +79,7 @@ class ClaudeCodeModel(Model):
         disallowed_tools: list[str] | None = None,
         permission_mode: str | None = None,
         max_turns: int | None = None,
+        message_callback: MessageCallbackType | None = None,
     ) -> None:
         self._model_name = model_name
         self._working_directory = working_directory
@@ -75,6 +88,7 @@ class ClaudeCodeModel(Model):
         self._disallowed_tools = disallowed_tools
         self._permission_mode = permission_mode
         self._max_turns = max_turns
+        self._message_callback = message_callback
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
@@ -82,7 +96,7 @@ class ClaudeCodeModel(Model):
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
             "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
-            "permission_mode=%s, max_turns=%s",
+            "permission_mode=%s, max_turns=%s, has_message_callback=%s",
             self._model_name,
             self._working_directory,
             self._timeout,
@@ -90,6 +104,7 @@ class ClaudeCodeModel(Model):
             self._disallowed_tools,
             self._permission_mode,
             self._max_turns,
+            self._message_callback is not None,
         )
 
     @property
@@ -186,6 +201,132 @@ class ClaudeCodeModel(Model):
                 return model_request_parameters.output_object.json_schema
         return None
 
+    async def _invoke_callback(self, message: Message) -> None:
+        """Invoke message callback if registered.
+
+        Handles both sync and async callbacks. Exceptions are caught and logged
+        to prevent callback errors from interrupting execution.
+
+        Args:
+            message: The message to pass to the callback.
+        """
+        if self._message_callback is None:
+            return
+
+        try:
+            result = self._message_callback(message)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.error(
+                "Message callback raised an exception. message_type=%s",
+                type(message).__name__,
+                exc_info=True,
+            )
+
+    def _extract_model_settings(
+        self,
+        model_settings: ModelSettings | None,
+    ) -> _ExtractedSettings:
+        """Extract and validate settings from ModelSettings.
+
+        Args:
+            model_settings: Optional model settings dict.
+
+        Returns:
+            _ExtractedSettings with extracted values, falling back to instance defaults.
+
+        Raises:
+            ValueError: If max_budget_usd is negative or max_turns is non-positive.
+            TypeError: If working_directory has invalid type.
+        """
+        timeout = self._timeout
+        max_budget_usd: float | None = None
+        append_system_prompt: str | None = None
+        max_turns: int | None = self._max_turns
+        working_directory: str | None = self._working_directory
+
+        if model_settings is None:
+            return _ExtractedSettings(
+                timeout=timeout,
+                max_budget_usd=max_budget_usd,
+                append_system_prompt=append_system_prompt,
+                max_turns=max_turns,
+                working_directory=working_directory,
+            )
+
+        timeout_value = model_settings.get("timeout")
+        if timeout_value is not None:
+            if isinstance(timeout_value, (int, float)):
+                timeout = float(timeout_value)
+            else:
+                logger.warning(
+                    "model_settings 'timeout' has invalid type %s, "
+                    "expected int or float. Using default timeout.",
+                    type(timeout_value).__name__,
+                )
+
+        max_budget_value = model_settings.get("max_budget_usd")
+        if max_budget_value is not None:
+            if isinstance(max_budget_value, (int, float)):
+                max_budget_usd = float(max_budget_value)
+                if max_budget_usd < 0:
+                    raise ValueError("max_budget_usd must be non-negative")
+            else:
+                logger.warning(
+                    "model_settings 'max_budget_usd' has invalid type %s, "
+                    "expected int or float. Ignoring this setting.",
+                    type(max_budget_value).__name__,
+                )
+
+        append_prompt_value = model_settings.get("append_system_prompt")
+        if append_prompt_value is not None:
+            if isinstance(append_prompt_value, str):
+                append_system_prompt = append_prompt_value
+            else:
+                logger.warning(
+                    "model_settings 'append_system_prompt' has invalid type %s, "
+                    "expected str. Ignoring this setting.",
+                    type(append_prompt_value).__name__,
+                )
+
+        max_turns_value = model_settings.get("max_turns")
+        if max_turns_value is not None:
+            if isinstance(max_turns_value, int) and not isinstance(
+                max_turns_value, bool
+            ):
+                if max_turns_value <= 0:
+                    raise ValueError("max_turns must be a positive integer")
+                max_turns = max_turns_value
+            else:
+                logger.warning(
+                    "model_settings 'max_turns' has invalid type %s, "
+                    "expected int. Ignoring this setting.",
+                    type(max_turns_value).__name__,
+                )
+
+        wd_value = model_settings.get("working_directory")
+        if wd_value is not None:
+            if not isinstance(wd_value, str):
+                raise TypeError(
+                    f"model_settings 'working_directory' must be str, "
+                    f"got {type(wd_value).__name__}"
+                )
+            if wd_value == "":
+                logger.warning(
+                    "model_settings 'working_directory' is an empty string. "
+                    "This may not be a valid path."
+                )
+            working_directory = wd_value
+
+        return _ExtractedSettings(
+            timeout=timeout,
+            max_budget_usd=max_budget_usd,
+            append_system_prompt=append_system_prompt,
+            max_turns=max_turns,
+            working_directory=working_directory,
+        )
+
     def _build_agent_options(
         self,
         system_prompt: str | None = None,
@@ -280,6 +421,9 @@ class ClaudeCodeModel(Model):
                 async for message in query(prompt=prompt, options=options):
                     if isinstance(message, ResultMessage):
                         result_message = message
+                    else:
+                        # Invoke callback for intermediate messages
+                        await self._invoke_callback(message)
             except Exception as e:
                 raise CLIExecutionError(
                     f"SDK query failed: {e}",
@@ -477,95 +621,26 @@ class ClaudeCodeModel(Model):
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
 
-        # Extract settings from model_settings
-        timeout = self._timeout
-        max_budget_usd: float | None = None
-        append_system_prompt: str | None = None
-        max_turns: int | None = self._max_turns
-        working_directory: str | None = self._working_directory
-
-        if model_settings is not None:
-            timeout_value = model_settings.get("timeout")
-            if timeout_value is not None:
-                if isinstance(timeout_value, (int, float)):
-                    timeout = float(timeout_value)
-                else:
-                    logger.warning(
-                        "model_settings 'timeout' has invalid type %s, "
-                        "expected int or float. Using default timeout.",
-                        type(timeout_value).__name__,
-                    )
-
-            max_budget_value = model_settings.get("max_budget_usd")
-            if max_budget_value is not None:
-                if isinstance(max_budget_value, (int, float)):
-                    max_budget_usd = float(max_budget_value)
-                    if max_budget_usd < 0:
-                        raise ValueError("max_budget_usd must be non-negative")
-                else:
-                    logger.warning(
-                        "model_settings 'max_budget_usd' has invalid type %s, "
-                        "expected int or float. Ignoring this setting.",
-                        type(max_budget_value).__name__,
-                    )
-
-            append_prompt_value = model_settings.get("append_system_prompt")
-            if append_prompt_value is not None:
-                if isinstance(append_prompt_value, str):
-                    append_system_prompt = append_prompt_value
-                else:
-                    logger.warning(
-                        "model_settings 'append_system_prompt' has invalid type %s, "
-                        "expected str. Ignoring this setting.",
-                        type(append_prompt_value).__name__,
-                    )
-
-            max_turns_value = model_settings.get("max_turns")
-            if max_turns_value is not None:
-                if isinstance(max_turns_value, int) and not isinstance(
-                    max_turns_value, bool
-                ):
-                    if max_turns_value <= 0:
-                        raise ValueError("max_turns must be a positive integer")
-                    max_turns = max_turns_value
-                else:
-                    logger.warning(
-                        "model_settings 'max_turns' has invalid type %s, "
-                        "expected int. Ignoring this setting.",
-                        type(max_turns_value).__name__,
-                    )
-
-            wd_value = model_settings.get("working_directory")
-            if wd_value is not None:
-                if not isinstance(wd_value, str):
-                    raise TypeError(
-                        f"model_settings 'working_directory' must be str, "
-                        f"got {type(wd_value).__name__}"
-                    )
-                if wd_value == "":
-                    logger.warning(
-                        "model_settings 'working_directory' is an empty string. "
-                        "This may not be a valid path."
-                    )
-                working_directory = wd_value
+        # Extract settings using shared helper
+        settings = self._extract_model_settings(model_settings)
 
         # Apply default max_turns for json_schema mode
-        effective_max_turns = max_turns
+        effective_max_turns = settings.max_turns
         if json_schema is not None and effective_max_turns is None:
             effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
 
         # Build ClaudeAgentOptions
         options = self._build_agent_options(
             system_prompt=system_prompt,
-            append_system_prompt=append_system_prompt,
-            max_budget_usd=max_budget_usd,
+            append_system_prompt=settings.append_system_prompt,
+            max_budget_usd=settings.max_budget_usd,
             max_turns=effective_max_turns,
-            working_directory=working_directory,
+            working_directory=settings.working_directory,
             json_schema=json_schema,
         )
 
         # Execute SDK query
-        result = await self._execute_sdk_query(user_prompt, options, timeout)
+        result = await self._execute_sdk_query(user_prompt, options, settings.timeout)
 
         # Check for error response from SDK
         if result.is_error:
@@ -750,6 +825,92 @@ class ClaudeCodeModel(Model):
             response=cli_response.to_model_response(model_name=self._model_name),
             cli_response=cli_response,
         )
+
+    async def stream_messages(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> AsyncIterator[Message]:
+        """Stream messages from Claude Agent SDK query.
+
+        This method provides direct access to all messages from the SDK query,
+        including intermediate AssistantMessage, ToolUseBlock, etc.
+        Useful for building streaming UIs or real-time progress indicators.
+
+        Note:
+            This method is named 'stream_messages' to avoid conflicting with
+            pydantic-ai Model.request_stream() which has a different signature.
+
+        Args:
+            messages: The conversation messages.
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns,
+                append_system_prompt, working_directory).
+            model_request_parameters: Request parameters for tools and output.
+
+        Yields:
+            Message objects from the SDK query (AssistantMessage, ResultMessage, etc.).
+
+        Raises:
+            ValueError: If no user prompt is found in messages.
+            CLIExecutionError: If SDK execution fails or times out.
+
+        Example:
+            ```python
+            model = ClaudeCodeModel()
+            async for message in model.stream_messages(messages, settings, params):
+                if isinstance(message, AssistantMessage):
+                    print(f"Assistant: {message.content}")
+                elif isinstance(message, ResultMessage):
+                    print(f"Final result: {message.result}")
+            ```
+        """
+        # Process function_tools to update MCP server
+        self._process_function_tools(model_request_parameters.function_tools)
+
+        json_schema = self._extract_json_schema(model_request_parameters)
+
+        # Extract prompts and settings using shared helpers
+        system_prompt = self._extract_system_prompt(messages)
+        user_prompt = self._extract_user_prompt(messages)
+        settings = self._extract_model_settings(model_settings)
+
+        # Apply default max_turns for json_schema mode
+        effective_max_turns = settings.max_turns
+        if json_schema is not None and effective_max_turns is None:
+            effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
+
+        options = self._build_agent_options(
+            system_prompt=system_prompt,
+            append_system_prompt=settings.append_system_prompt,
+            max_budget_usd=settings.max_budget_usd,
+            max_turns=effective_max_turns,
+            working_directory=settings.working_directory,
+            json_schema=json_schema,
+        )
+
+        # Stream messages with timeout handling and SDK exception conversion
+        with anyio.move_on_after(settings.timeout) as cancel_scope:
+            try:
+                async for message in query(prompt=user_prompt, options=options):
+                    yield message
+            except Exception as e:
+                raise CLIExecutionError(
+                    f"SDK query failed: {e}",
+                    exit_code=None,
+                    stderr=str(e),
+                    error_type="unknown",
+                    recoverable=False,
+                ) from e
+
+        if cancel_scope.cancelled_caught:
+            raise CLIExecutionError(
+                f"SDK query timed out after {settings.timeout} seconds",
+                exit_code=TIMEOUT_EXIT_CODE,
+                stderr="Query was cancelled due to timeout",
+                error_type="timeout",
+                recoverable=True,
+            )
 
     def set_agent_toolsets(
         self, toolsets: Sequence[PydanticAITool] | AgentToolset | None
