@@ -156,7 +156,7 @@ class StructuredOutputError(ClaudeCodeError):
     in {"parameters": {...}} instead of top-level structure).
 
     To debug, check the session file at:
-        ~/.claude/projects/<project-id>/<session_id>.jsonl
+        ~/.claude/projects/<project-hash>/<session_id>.jsonl
 
     Attributes:
         session_id: Claude session ID for debugging.

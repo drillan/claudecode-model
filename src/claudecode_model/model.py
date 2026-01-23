@@ -519,7 +519,7 @@ class ClaudeCodeModel(Model):
             logger.error(
                 "Structured output failed after maximum retries: "
                 "session_id=%s, num_turns=%s, duration_ms=%s. "
-                "Debug session file: ~/.claude/projects/*/%s.jsonl",
+                "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
                 result.session_id,
                 result.num_turns,
                 result.duration_ms,
@@ -533,6 +533,18 @@ class ClaudeCodeModel(Model):
                 session_id=result.session_id,
                 num_turns=result.num_turns,
                 duration_ms=result.duration_ms,
+            )
+
+        # Warn about unknown error subtypes for future SDK compatibility
+        if (
+            result.subtype
+            and result.subtype.startswith("error_")
+            and not result.is_error
+        ):
+            logger.warning(
+                "Unknown error subtype encountered: %s (session_id=%s)",
+                result.subtype,
+                result.session_id,
             )
 
         # Convert to CLIResponse which provides detailed metadata for public API

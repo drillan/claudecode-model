@@ -330,8 +330,7 @@ class TestStructuredOutputError:
         assert "duration_ms=99031" in caplog.text
         assert ".jsonl" in caplog.text  # Should mention session file path
 
-    @pytest.mark.asyncio
-    async def test_structured_output_error_attributes(self) -> None:
+    def test_structured_output_error_attributes(self) -> None:
         """StructuredOutputError should have correct attributes."""
         error = StructuredOutputError(
             "Test message",
@@ -345,8 +344,7 @@ class TestStructuredOutputError:
         assert error.num_turns == 5
         assert error.duration_ms == 10000
 
-    @pytest.mark.asyncio
-    async def test_structured_output_error_optional_attributes(self) -> None:
+    def test_structured_output_error_optional_attributes(self) -> None:
         """StructuredOutputError should work with optional attributes."""
         error = StructuredOutputError("Test message")
 
