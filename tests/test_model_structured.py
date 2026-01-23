@@ -427,8 +427,8 @@ class TestClaudeCodeModelExtractJsonSchema:
 class TestParametersWrapperUnwrap:
     """Tests for automatic unwrapping of {"parameters": {...}} format.
 
-    Claude Code CLI sometimes wraps structured output in a parameters envelope.
-    This test class verifies that _try_unwrap_parameters_wrapper correctly
+    Some models (via Claude Agent SDK) may wrap structured output in a parameters
+    envelope. This test class verifies that _try_unwrap_parameters_wrapper correctly
     detects and unwraps this format when appropriate.
     """
 
@@ -519,10 +519,10 @@ class TestParametersWrapperUnwrap:
 
         assert unwrapped is None
 
-    def test_warning_log_includes_session_info(
+    def test_info_log_includes_session_info(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Should log warning with session_id when unwrapping."""
+        """Should log info with session_id when unwrapping."""
         import logging
 
         model = ClaudeCodeModel()
@@ -532,7 +532,7 @@ class TestParametersWrapperUnwrap:
             session_id="test-session-123",
         )
 
-        with caplog.at_level(logging.WARNING, logger="claudecode_model.model"):
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
             model._try_unwrap_parameters_wrapper(result_message)
 
         assert len(caplog.records) == 1

@@ -355,7 +355,13 @@ class ClaudeCodeModel(Model):
         # Try to parse as JSON
         try:
             parsed = json.loads(result.result)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug(
+                "Result is not valid JSON, skipping unwrap check. "
+                "session_id=%s, error=%s",
+                result.session_id,
+                str(e),
+            )
             return None
 
         # Check for {"parameters": {...}} format (single key)
@@ -369,8 +375,8 @@ class ClaudeCodeModel(Model):
         if not isinstance(parameters_value, dict):
             return None
 
-        # Log warning about automatic unwrapping
-        logger.warning(
+        # Log info about automatic unwrapping
+        logger.info(
             "Detected and unwrapped parameters wrapper in result. "
             "session_id=%s, num_turns=%s",
             result.session_id,
