@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import NamedTuple, TypedDict
+
+from claude_agent_sdk.types import Message
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -16,6 +19,11 @@ from claudecode_model.exceptions import CLIResponseParseError
 type JsonValue = (
     int | float | str | bool | None | list[JsonValue] | dict[str, JsonValue]
 )
+
+# Message callback types for intermediate message access
+MessageCallback = Callable[[Message], None]
+AsyncMessageCallback = Callable[[Message], Awaitable[None]]
+MessageCallbackType = MessageCallback | AsyncMessageCallback
 
 
 class ClaudeCodeModelSettings(ModelSettings, total=False):

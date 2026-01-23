@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-from claude_agent_sdk.types import McpSdkServerConfig
+from claude_agent_sdk.types import McpSdkServerConfig, Message
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -43,6 +44,7 @@ from claudecode_model.types import (
     CLIResponse,
     CLIUsage,
     JsonValue,
+    MessageCallbackType,
     RequestWithMetadataResult,
 )
 
@@ -67,6 +69,7 @@ class ClaudeCodeModel(Model):
         disallowed_tools: list[str] | None = None,
         permission_mode: str | None = None,
         max_turns: int | None = None,
+        message_callback: MessageCallbackType | None = None,
     ) -> None:
         self._model_name = model_name
         self._working_directory = working_directory
@@ -75,6 +78,7 @@ class ClaudeCodeModel(Model):
         self._disallowed_tools = disallowed_tools
         self._permission_mode = permission_mode
         self._max_turns = max_turns
+        self._message_callback = message_callback
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
@@ -82,7 +86,7 @@ class ClaudeCodeModel(Model):
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
             "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
-            "permission_mode=%s, max_turns=%s",
+            "permission_mode=%s, max_turns=%s, has_message_callback=%s",
             self._model_name,
             self._working_directory,
             self._timeout,
@@ -90,6 +94,7 @@ class ClaudeCodeModel(Model):
             self._disallowed_tools,
             self._permission_mode,
             self._max_turns,
+            self._message_callback is not None,
         )
 
     @property
@@ -186,6 +191,28 @@ class ClaudeCodeModel(Model):
                 return model_request_parameters.output_object.json_schema
         return None
 
+    async def _invoke_callback(self, message: Message) -> None:
+        """Invoke message callback if registered.
+
+        Handles both sync and async callbacks. Exceptions are caught and logged
+        to prevent callback errors from interrupting execution.
+
+        Args:
+            message: The message to pass to the callback.
+        """
+        if self._message_callback is None:
+            return
+
+        try:
+            result = self._message_callback(message)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as e:
+            logger.warning(
+                "Message callback raised an exception: %s. Continuing execution.",
+                e,
+            )
+
     def _build_agent_options(
         self,
         system_prompt: str | None = None,
@@ -280,6 +307,9 @@ class ClaudeCodeModel(Model):
                 async for message in query(prompt=prompt, options=options):
                     if isinstance(message, ResultMessage):
                         result_message = message
+                    else:
+                        # Invoke callback for intermediate messages
+                        await self._invoke_callback(message)
             except Exception as e:
                 raise CLIExecutionError(
                     f"SDK query failed: {e}",
@@ -750,6 +780,111 @@ class ClaudeCodeModel(Model):
             response=cli_response.to_model_response(model_name=self._model_name),
             cli_response=cli_response,
         )
+
+    async def stream_messages(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> AsyncIterator[Message]:
+        """Stream messages from Claude Agent SDK query.
+
+        This method provides direct access to all messages from the SDK query,
+        including intermediate AssistantMessage, ToolUseBlock, etc.
+        Useful for building streaming UIs or real-time progress indicators.
+
+        Note:
+            This method is named 'stream_messages' to avoid conflicting with
+            pydantic-ai Model.request_stream() which has a different signature.
+
+        Args:
+            messages: The conversation messages.
+            model_settings: Optional model settings (timeout, max_budget_usd, max_turns,
+                append_system_prompt, working_directory).
+            model_request_parameters: Request parameters for tools and output.
+
+        Yields:
+            Message objects from the SDK query (AssistantMessage, ResultMessage, etc.).
+
+        Raises:
+            ValueError: If no user prompt is found in messages.
+            CLIExecutionError: If SDK execution fails or times out.
+
+        Example:
+            ```python
+            model = ClaudeCodeModel()
+            async for message in model.stream_messages(messages, settings, params):
+                if isinstance(message, AssistantMessage):
+                    print(f"Assistant: {message.content}")
+                elif isinstance(message, ResultMessage):
+                    print(f"Final result: {message.result}")
+            ```
+        """
+        # Process function_tools to update MCP server
+        self._process_function_tools(model_request_parameters.function_tools)
+
+        json_schema = self._extract_json_schema(model_request_parameters)
+
+        # Extract settings (reuse existing logic from _execute_request)
+        system_prompt = self._extract_system_prompt(messages)
+        user_prompt = self._extract_user_prompt(messages)
+
+        timeout = self._timeout
+        max_budget_usd: float | None = None
+        append_system_prompt: str | None = None
+        max_turns: int | None = self._max_turns
+        working_directory: str | None = self._working_directory
+
+        if model_settings is not None:
+            timeout_value = model_settings.get("timeout")
+            if timeout_value is not None and isinstance(timeout_value, (int, float)):
+                timeout = float(timeout_value)
+
+            max_budget_value = model_settings.get("max_budget_usd")
+            if max_budget_value is not None and isinstance(
+                max_budget_value, (int, float)
+            ):
+                max_budget_usd = float(max_budget_value)
+
+            append_prompt_value = model_settings.get("append_system_prompt")
+            if append_prompt_value is not None and isinstance(append_prompt_value, str):
+                append_system_prompt = append_prompt_value
+
+            max_turns_value = model_settings.get("max_turns")
+            if max_turns_value is not None and isinstance(max_turns_value, int):
+                max_turns = max_turns_value
+
+            wd_value = model_settings.get("working_directory")
+            if wd_value is not None and isinstance(wd_value, str):
+                working_directory = wd_value
+
+        # Apply default max_turns for json_schema mode
+        effective_max_turns = max_turns
+        if json_schema is not None and effective_max_turns is None:
+            effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
+
+        options = self._build_agent_options(
+            system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
+            max_budget_usd=max_budget_usd,
+            max_turns=effective_max_turns,
+            working_directory=working_directory,
+            json_schema=json_schema,
+        )
+
+        # Stream messages with timeout handling
+        with anyio.move_on_after(timeout) as cancel_scope:
+            async for message in query(prompt=user_prompt, options=options):
+                yield message
+
+        if cancel_scope.cancelled_caught:
+            raise CLIExecutionError(
+                f"SDK query timed out after {timeout} seconds",
+                exit_code=TIMEOUT_EXIT_CODE,
+                stderr="Query was cancelled due to timeout",
+                error_type="timeout",
+                recoverable=True,
+            )
 
     def set_agent_toolsets(
         self, toolsets: Sequence[PydanticAITool] | AgentToolset | None
