@@ -12,7 +12,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from claudecode_model.exceptions import CLIExecutionError
+from claudecode_model.exceptions import CLIExecutionError, StructuredOutputError
 from claudecode_model.model import ClaudeCodeModel
 
 
@@ -254,3 +254,101 @@ class TestResultMessageToCliResponseEmptyResultWarning:
         # Verify no warning about empty result
         assert "empty result" not in caplog.text
         assert cli_response.structured_output == {"name": "test"}
+
+
+class TestStructuredOutputError:
+    """Tests for structured output retry exhaustion handling."""
+
+    @pytest.mark.asyncio
+    async def test_raises_structured_output_error_on_max_retries(self) -> None:
+        """_execute_request should raise StructuredOutputError when max retries exceeded."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        # Simulate SDK returning error_max_structured_output_retries
+        error_result = ResultMessage(
+            subtype="error_max_structured_output_retries",
+            duration_ms=99031,
+            duration_api_ms=98000,
+            is_error=False,  # Note: is_error is False but subtype indicates failure
+            num_turns=6,
+            session_id="d5f9d990-27d2-4d6a-8925-cf7e043e6649",
+            result="",  # Empty result
+            structured_output=None,  # No structured output
+            usage={"input_tokens": 1000, "output_tokens": 500},
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model._execute_request(messages, None)
+
+        # Verify exception contains helpful information
+        assert "Structured output failed" in str(exc_info.value)
+        assert "maximum retries" in str(exc_info.value)
+        assert exc_info.value.session_id == "d5f9d990-27d2-4d6a-8925-cf7e043e6649"
+        assert exc_info.value.num_turns == 6
+        assert exc_info.value.duration_ms == 99031
+
+    @pytest.mark.asyncio
+    async def test_logs_error_with_session_info_on_max_retries(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_execute_request should log error with session_id for debugging."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error_max_structured_output_retries",
+            duration_ms=99031,
+            duration_api_ms=98000,
+            is_error=False,
+            num_turns=6,
+            session_id="test-session-id-12345",
+            result="",
+            structured_output=None,
+            usage={"input_tokens": 1000, "output_tokens": 500},
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with caplog.at_level(logging.ERROR):
+            with patch("claudecode_model.model.query", mock_query):
+                with pytest.raises(StructuredOutputError):
+                    await model._execute_request(messages, None)
+
+        # Verify error log contains session info for debugging
+        assert "session_id=test-session-id-12345" in caplog.text
+        assert "num_turns=6" in caplog.text
+        assert "duration_ms=99031" in caplog.text
+        assert ".jsonl" in caplog.text  # Should mention session file path
+
+    def test_structured_output_error_attributes(self) -> None:
+        """StructuredOutputError should have correct attributes."""
+        error = StructuredOutputError(
+            "Test message",
+            session_id="test-session",
+            num_turns=5,
+            duration_ms=10000,
+        )
+
+        assert str(error) == "Test message"
+        assert error.session_id == "test-session"
+        assert error.num_turns == 5
+        assert error.duration_ms == 10000
+
+    def test_structured_output_error_optional_attributes(self) -> None:
+        """StructuredOutputError should work with optional attributes."""
+        error = StructuredOutputError("Test message")
+
+        assert str(error) == "Test message"
+        assert error.session_id is None
+        assert error.num_turns is None
+        assert error.duration_ms is None

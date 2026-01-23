@@ -145,3 +145,34 @@ class TypeHintResolutionError(ClaudeCodeError):
         super().__init__(message)
         self.type_name = type_name
         self.original_error = original_error
+
+
+class StructuredOutputError(ClaudeCodeError):
+    """Raised when structured output extraction fails after maximum retries.
+
+    This error indicates that Claude Code CLI attempted to extract structured
+    output matching the required schema multiple times but failed. This typically
+    happens when the model outputs JSON in an unexpected format (e.g., wrapped
+    in {"parameters": {...}} instead of top-level structure).
+
+    To debug, check the session file at:
+        ~/.claude/projects/<project-hash>/<session_id>.jsonl
+
+    Attributes:
+        session_id: Claude session ID for debugging.
+        num_turns: Number of turns executed before failure.
+        duration_ms: Total duration in milliseconds.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        num_turns: int | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.num_turns = num_turns
+        self.duration_ms = duration_ms

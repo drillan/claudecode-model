@@ -28,6 +28,7 @@ from claudecode_model.cli import (
 )
 from claudecode_model.exceptions import (
     CLIExecutionError,
+    StructuredOutputError,
     ToolNotFoundError,
     ToolsetNotRegisteredError,
 )
@@ -511,6 +512,39 @@ class ClaudeCodeModel(Model):
                 stderr=result.result or "",
                 error_type="invalid_response",
                 recoverable=False,
+            )
+
+        # Check for structured output extraction failure
+        if result.subtype == "error_max_structured_output_retries":
+            logger.error(
+                "Structured output failed after maximum retries: "
+                "session_id=%s, num_turns=%s, duration_ms=%s. "
+                "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
+                result.session_id,
+                result.num_turns,
+                result.duration_ms,
+                result.session_id,
+            )
+            raise StructuredOutputError(
+                f"Structured output failed after maximum retries. "
+                f"The model returned output that did not match the required schema. "
+                f"Session: {result.session_id}, Turns: {result.num_turns}, "
+                f"Duration: {result.duration_ms}ms",
+                session_id=result.session_id,
+                num_turns=result.num_turns,
+                duration_ms=result.duration_ms,
+            )
+
+        # Warn about unknown error subtypes for future SDK compatibility
+        if (
+            result.subtype
+            and result.subtype.startswith("error_")
+            and not result.is_error
+        ):
+            logger.warning(
+                "Unknown error subtype encountered: %s (session_id=%s)",
+                result.subtype,
+                result.session_id,
             )
 
         # Convert to CLIResponse which provides detailed metadata for public API
