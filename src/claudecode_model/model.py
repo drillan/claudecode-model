@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
@@ -54,6 +54,16 @@ if TYPE_CHECKING:
     from pydantic_ai.tools import ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+class _ExtractedSettings(NamedTuple):
+    """Internal container for extracted model settings."""
+
+    timeout: float
+    max_budget_usd: float | None
+    append_system_prompt: str | None
+    max_turns: int | None
+    working_directory: str | None
 
 
 class ClaudeCodeModel(Model):
@@ -207,11 +217,115 @@ class ClaudeCodeModel(Model):
             result = self._message_callback(message)
             if inspect.isawaitable(result):
                 await result
-        except Exception as e:
-            logger.warning(
-                "Message callback raised an exception: %s. Continuing execution.",
-                e,
+        except Exception:
+            logger.error(
+                "Message callback raised an exception. message_type=%s",
+                type(message).__name__,
+                exc_info=True,
             )
+
+    def _extract_model_settings(
+        self,
+        model_settings: ModelSettings | None,
+    ) -> _ExtractedSettings:
+        """Extract and validate settings from ModelSettings.
+
+        Args:
+            model_settings: Optional model settings dict.
+
+        Returns:
+            _ExtractedSettings with extracted values, falling back to instance defaults.
+
+        Raises:
+            ValueError: If max_budget_usd is negative or max_turns is non-positive.
+            TypeError: If working_directory has invalid type.
+        """
+        timeout = self._timeout
+        max_budget_usd: float | None = None
+        append_system_prompt: str | None = None
+        max_turns: int | None = self._max_turns
+        working_directory: str | None = self._working_directory
+
+        if model_settings is None:
+            return _ExtractedSettings(
+                timeout=timeout,
+                max_budget_usd=max_budget_usd,
+                append_system_prompt=append_system_prompt,
+                max_turns=max_turns,
+                working_directory=working_directory,
+            )
+
+        timeout_value = model_settings.get("timeout")
+        if timeout_value is not None:
+            if isinstance(timeout_value, (int, float)):
+                timeout = float(timeout_value)
+            else:
+                logger.warning(
+                    "model_settings 'timeout' has invalid type %s, "
+                    "expected int or float. Using default timeout.",
+                    type(timeout_value).__name__,
+                )
+
+        max_budget_value = model_settings.get("max_budget_usd")
+        if max_budget_value is not None:
+            if isinstance(max_budget_value, (int, float)):
+                max_budget_usd = float(max_budget_value)
+                if max_budget_usd < 0:
+                    raise ValueError("max_budget_usd must be non-negative")
+            else:
+                logger.warning(
+                    "model_settings 'max_budget_usd' has invalid type %s, "
+                    "expected int or float. Ignoring this setting.",
+                    type(max_budget_value).__name__,
+                )
+
+        append_prompt_value = model_settings.get("append_system_prompt")
+        if append_prompt_value is not None:
+            if isinstance(append_prompt_value, str):
+                append_system_prompt = append_prompt_value
+            else:
+                logger.warning(
+                    "model_settings 'append_system_prompt' has invalid type %s, "
+                    "expected str. Ignoring this setting.",
+                    type(append_prompt_value).__name__,
+                )
+
+        max_turns_value = model_settings.get("max_turns")
+        if max_turns_value is not None:
+            if isinstance(max_turns_value, int) and not isinstance(
+                max_turns_value, bool
+            ):
+                if max_turns_value <= 0:
+                    raise ValueError("max_turns must be a positive integer")
+                max_turns = max_turns_value
+            else:
+                logger.warning(
+                    "model_settings 'max_turns' has invalid type %s, "
+                    "expected int. Ignoring this setting.",
+                    type(max_turns_value).__name__,
+                )
+
+        wd_value = model_settings.get("working_directory")
+        if wd_value is not None:
+            if not isinstance(wd_value, str):
+                raise TypeError(
+                    f"model_settings 'working_directory' must be str, "
+                    f"got {type(wd_value).__name__}"
+                )
+            if wd_value == "":
+                logger.warning(
+                    "model_settings 'working_directory' is an empty string. "
+                    "This may not be a valid path."
+                )
+            working_directory = wd_value
+
+        return _ExtractedSettings(
+            timeout=timeout,
+            max_budget_usd=max_budget_usd,
+            append_system_prompt=append_system_prompt,
+            max_turns=max_turns,
+            working_directory=working_directory,
+        )
 
     def _build_agent_options(
         self,
@@ -507,95 +621,26 @@ class ClaudeCodeModel(Model):
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
 
-        # Extract settings from model_settings
-        timeout = self._timeout
-        max_budget_usd: float | None = None
-        append_system_prompt: str | None = None
-        max_turns: int | None = self._max_turns
-        working_directory: str | None = self._working_directory
-
-        if model_settings is not None:
-            timeout_value = model_settings.get("timeout")
-            if timeout_value is not None:
-                if isinstance(timeout_value, (int, float)):
-                    timeout = float(timeout_value)
-                else:
-                    logger.warning(
-                        "model_settings 'timeout' has invalid type %s, "
-                        "expected int or float. Using default timeout.",
-                        type(timeout_value).__name__,
-                    )
-
-            max_budget_value = model_settings.get("max_budget_usd")
-            if max_budget_value is not None:
-                if isinstance(max_budget_value, (int, float)):
-                    max_budget_usd = float(max_budget_value)
-                    if max_budget_usd < 0:
-                        raise ValueError("max_budget_usd must be non-negative")
-                else:
-                    logger.warning(
-                        "model_settings 'max_budget_usd' has invalid type %s, "
-                        "expected int or float. Ignoring this setting.",
-                        type(max_budget_value).__name__,
-                    )
-
-            append_prompt_value = model_settings.get("append_system_prompt")
-            if append_prompt_value is not None:
-                if isinstance(append_prompt_value, str):
-                    append_system_prompt = append_prompt_value
-                else:
-                    logger.warning(
-                        "model_settings 'append_system_prompt' has invalid type %s, "
-                        "expected str. Ignoring this setting.",
-                        type(append_prompt_value).__name__,
-                    )
-
-            max_turns_value = model_settings.get("max_turns")
-            if max_turns_value is not None:
-                if isinstance(max_turns_value, int) and not isinstance(
-                    max_turns_value, bool
-                ):
-                    if max_turns_value <= 0:
-                        raise ValueError("max_turns must be a positive integer")
-                    max_turns = max_turns_value
-                else:
-                    logger.warning(
-                        "model_settings 'max_turns' has invalid type %s, "
-                        "expected int. Ignoring this setting.",
-                        type(max_turns_value).__name__,
-                    )
-
-            wd_value = model_settings.get("working_directory")
-            if wd_value is not None:
-                if not isinstance(wd_value, str):
-                    raise TypeError(
-                        f"model_settings 'working_directory' must be str, "
-                        f"got {type(wd_value).__name__}"
-                    )
-                if wd_value == "":
-                    logger.warning(
-                        "model_settings 'working_directory' is an empty string. "
-                        "This may not be a valid path."
-                    )
-                working_directory = wd_value
+        # Extract settings using shared helper
+        settings = self._extract_model_settings(model_settings)
 
         # Apply default max_turns for json_schema mode
-        effective_max_turns = max_turns
+        effective_max_turns = settings.max_turns
         if json_schema is not None and effective_max_turns is None:
             effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
 
         # Build ClaudeAgentOptions
         options = self._build_agent_options(
             system_prompt=system_prompt,
-            append_system_prompt=append_system_prompt,
-            max_budget_usd=max_budget_usd,
+            append_system_prompt=settings.append_system_prompt,
+            max_budget_usd=settings.max_budget_usd,
             max_turns=effective_max_turns,
-            working_directory=working_directory,
+            working_directory=settings.working_directory,
             json_schema=json_schema,
         )
 
         # Execute SDK query
-        result = await self._execute_sdk_query(user_prompt, options, timeout)
+        result = await self._execute_sdk_query(user_prompt, options, settings.timeout)
 
         # Check for error response from SDK
         if result.is_error:
@@ -825,61 +870,42 @@ class ClaudeCodeModel(Model):
 
         json_schema = self._extract_json_schema(model_request_parameters)
 
-        # Extract settings (reuse existing logic from _execute_request)
+        # Extract prompts and settings using shared helpers
         system_prompt = self._extract_system_prompt(messages)
         user_prompt = self._extract_user_prompt(messages)
-
-        timeout = self._timeout
-        max_budget_usd: float | None = None
-        append_system_prompt: str | None = None
-        max_turns: int | None = self._max_turns
-        working_directory: str | None = self._working_directory
-
-        if model_settings is not None:
-            timeout_value = model_settings.get("timeout")
-            if timeout_value is not None and isinstance(timeout_value, (int, float)):
-                timeout = float(timeout_value)
-
-            max_budget_value = model_settings.get("max_budget_usd")
-            if max_budget_value is not None and isinstance(
-                max_budget_value, (int, float)
-            ):
-                max_budget_usd = float(max_budget_value)
-
-            append_prompt_value = model_settings.get("append_system_prompt")
-            if append_prompt_value is not None and isinstance(append_prompt_value, str):
-                append_system_prompt = append_prompt_value
-
-            max_turns_value = model_settings.get("max_turns")
-            if max_turns_value is not None and isinstance(max_turns_value, int):
-                max_turns = max_turns_value
-
-            wd_value = model_settings.get("working_directory")
-            if wd_value is not None and isinstance(wd_value, str):
-                working_directory = wd_value
+        settings = self._extract_model_settings(model_settings)
 
         # Apply default max_turns for json_schema mode
-        effective_max_turns = max_turns
+        effective_max_turns = settings.max_turns
         if json_schema is not None and effective_max_turns is None:
             effective_max_turns = DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA
 
         options = self._build_agent_options(
             system_prompt=system_prompt,
-            append_system_prompt=append_system_prompt,
-            max_budget_usd=max_budget_usd,
+            append_system_prompt=settings.append_system_prompt,
+            max_budget_usd=settings.max_budget_usd,
             max_turns=effective_max_turns,
-            working_directory=working_directory,
+            working_directory=settings.working_directory,
             json_schema=json_schema,
         )
 
-        # Stream messages with timeout handling
-        with anyio.move_on_after(timeout) as cancel_scope:
-            async for message in query(prompt=user_prompt, options=options):
-                yield message
+        # Stream messages with timeout handling and SDK exception conversion
+        with anyio.move_on_after(settings.timeout) as cancel_scope:
+            try:
+                async for message in query(prompt=user_prompt, options=options):
+                    yield message
+            except Exception as e:
+                raise CLIExecutionError(
+                    f"SDK query failed: {e}",
+                    exit_code=None,
+                    stderr=str(e),
+                    error_type="unknown",
+                    recoverable=False,
+                ) from e
 
         if cancel_scope.cancelled_caught:
             raise CLIExecutionError(
-                f"SDK query timed out after {timeout} seconds",
+                f"SDK query timed out after {settings.timeout} seconds",
                 exit_code=TIMEOUT_EXIT_CODE,
                 stderr="Query was cancelled due to timeout",
                 error_type="timeout",
