@@ -159,7 +159,7 @@ class TestClaudeCodeModelExecuteSDKQuery:
 
     @pytest.mark.asyncio
     async def test_execute_sdk_query_returns_result_message(self) -> None:
-        """_execute_sdk_query should return ResultMessage from SDK."""
+        """_execute_sdk_query should return _QueryResult containing ResultMessage."""
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
@@ -177,11 +177,12 @@ class TestClaudeCodeModelExecuteSDKQuery:
             yield expected_result
 
         with patch("claudecode_model.model.query", mock_query):
-            result = await model._execute_sdk_query(
+            query_result = await model._execute_sdk_query(
                 "Test prompt", options, timeout=60.0
             )
 
-        assert result is expected_result
+        assert query_result.result_message is expected_result
+        assert query_result.captured_structured_output_input is None
 
     @pytest.mark.asyncio
     async def test_execute_sdk_query_timeout(self) -> None:

@@ -183,7 +183,7 @@ class TestModelLogging:
         """Test that _execute_request logs start information."""
         from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
-        from claudecode_model.model import ClaudeCodeModel
+        from claudecode_model.model import ClaudeCodeModel, _QueryResult
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -206,7 +206,10 @@ class TestModelLogging:
                     "output_tokens": 50,
                 }
                 mock_result.structured_output = None
-                mock_query.return_value = mock_result
+                mock_query.return_value = _QueryResult(
+                    result_message=mock_result,
+                    captured_structured_output_input=None,
+                )
 
                 await model._execute_request(messages, None, json_schema=None)
 
@@ -225,7 +228,7 @@ class TestModelLogging:
         """Test that _execute_request logs completion information."""
         from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
-        from claudecode_model.model import ClaudeCodeModel
+        from claudecode_model.model import ClaudeCodeModel, _QueryResult
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -248,7 +251,10 @@ class TestModelLogging:
                     "output_tokens": 100,
                 }
                 mock_result.structured_output = {"key": "value"}
-                mock_query.return_value = mock_result
+                mock_query.return_value = _QueryResult(
+                    result_message=mock_result,
+                    captured_structured_output_input=None,
+                )
 
                 await model._execute_request(messages, None, json_schema=None)
 
