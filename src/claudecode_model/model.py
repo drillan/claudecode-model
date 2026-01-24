@@ -551,7 +551,7 @@ class ClaudeCodeModel(Model):
             result: ResultMessage from Claude Agent SDK.
 
         Returns:
-            Unwrapped dict if parameters wrapper detected, None otherwise.
+            Unwrapped dict if parameters/parameter wrapper detected, None otherwise.
         """
         # Only process if structured_output is not already set
         if result.structured_output is not None:

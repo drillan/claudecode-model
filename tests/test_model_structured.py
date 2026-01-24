@@ -507,6 +507,18 @@ class TestParametersWrapperUnwrap:
 
         assert unwrapped is None
 
+    def test_does_not_unwrap_non_dict_parameter_singular(self) -> None:
+        """Should NOT unwrap when 'parameter' (singular) value is not a dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameter": ["list", "value"]}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
     def test_does_not_unwrap_empty_result(self) -> None:
         """Should NOT unwrap when result is empty."""
         model = ClaudeCodeModel()
