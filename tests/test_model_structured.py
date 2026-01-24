@@ -538,3 +538,292 @@ class TestParametersWrapperUnwrap:
         assert len(caplog.records) == 1
         assert "parameters" in caplog.records[0].message.lower()
         assert "test-session-123" in caplog.records[0].message
+
+
+class TestStructuredOutputRecovery:
+    """Tests for recovery from error_max_structured_output_retries.
+
+    When the SDK returns error_max_structured_output_retries but the result
+    contains a valid {"parameters": {...}} wrapper, we should unwrap it and
+    treat it as a successful response instead of raising StructuredOutputError.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_parameters_wrapper(
+        self,
+    ) -> None:
+        """Should recover and return valid response when result has parameters wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error_max_structured_output_retries but with valid parameters wrapper
+        error_result = create_mock_result_message(
+            result='{"parameters": {"name": "test", "score": 95}}',
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should NOT raise StructuredOutputError - should recover
+            response = await model.request(messages, None, params)
+
+            # Verify the response contains the unwrapped content
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test", "score": 95}
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_no_parameters_wrapper_in_max_retries(
+        self,
+    ) -> None:
+        """Should raise StructuredOutputError when result doesn't have parameters wrapper."""
+        from claudecode_model.model import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error without parameters wrapper
+        error_result = create_mock_result_message(
+            result='{"name": "test", "score": 95}',  # No parameters wrapper
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model.request(messages, None, params)
+
+            assert "maximum retries" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_invalid_json_in_max_retries(self) -> None:
+        """Should raise StructuredOutputError when result is not valid JSON."""
+        from claudecode_model.model import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error with invalid JSON
+        error_result = create_mock_result_message(
+            result="This is not valid JSON",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model.request(messages, None, params)
+
+            assert "maximum retries" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_empty_result_in_max_retries(self) -> None:
+        """Should raise StructuredOutputError when result is empty."""
+        from claudecode_model.model import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error with empty result
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model.request(messages, None, params)
+
+            assert "maximum retries" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_logs_info_on_successful_recovery(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log INFO when recovery succeeds."""
+        import logging
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        error_result = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+            session_id="recovery-session-123",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
+            with patch("claudecode_model.model.query", mock_query):
+                await model.request(messages, None, params)
+
+        # Find the recovery log message
+        recovery_logs = [r for r in caplog.records if "recovered" in r.message.lower()]
+        assert len(recovery_logs) == 1
+        assert "error_max_structured_output_retries" in recovery_logs[0].message
+        assert "recovery-session-123" in recovery_logs[0].message
+
+    @pytest.mark.asyncio
+    async def test_logs_error_on_failed_recovery(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log ERROR when recovery fails."""
+        import logging
+
+        from claudecode_model.model import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        error_result = create_mock_result_message(
+            result='{"name": "test"}',  # No parameters wrapper
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+            session_id="failed-recovery-session",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with caplog.at_level(logging.ERROR, logger="claudecode_model.model"):
+            with patch("claudecode_model.model.query", mock_query):
+                with pytest.raises(StructuredOutputError):
+                    await model.request(messages, None, params)
+
+        # Find the error log message
+        error_logs = [
+            r for r in caplog.records if "structured output failed" in r.message.lower()
+        ]
+        assert len(error_logs) == 1
+        assert "failed-recovery-session" in error_logs[0].message
