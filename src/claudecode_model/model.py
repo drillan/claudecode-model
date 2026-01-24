@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-from claude_agent_sdk.types import McpSdkServerConfig, Message
+from claude_agent_sdk.types import (
+    AssistantMessage,
+    McpSdkServerConfig,
+    Message,
+    ToolUseBlock,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -66,6 +71,17 @@ class _ExtractedSettings(NamedTuple):
     working_directory: str | None
     continue_conversation: bool
     resume: str | None
+
+
+class _QueryResult(NamedTuple):
+    """Internal result from _execute_sdk_query."""
+
+    result_message: ResultMessage
+    captured_structured_output_input: dict[str, JsonValue] | None
+
+
+# Tool name used by Claude Agent SDK for structured output
+_STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput"
 
 
 class ClaudeCodeModel(Model):
@@ -454,8 +470,8 @@ class ClaudeCodeModel(Model):
         prompt: str,
         options: ClaudeAgentOptions,
         timeout: float,
-    ) -> ResultMessage:
-        """Execute Claude Agent SDK query and return ResultMessage.
+    ) -> _QueryResult:
+        """Execute Claude Agent SDK query and return _QueryResult.
 
         Args:
             prompt: The user prompt to send.
@@ -463,7 +479,7 @@ class ClaudeCodeModel(Model):
             timeout: Timeout in seconds.
 
         Returns:
-            ResultMessage from the SDK.
+            _QueryResult containing ResultMessage and captured StructuredOutput tool input.
 
         Raises:
             CLIExecutionError: If timeout occurs or no ResultMessage is received.
@@ -478,14 +494,23 @@ class ClaudeCodeModel(Model):
         )
 
         result_message: ResultMessage | None = None
+        captured_structured_output_input: dict[str, JsonValue] | None = None
 
-        async def run_query() -> ResultMessage:
-            nonlocal result_message
+        async def run_query() -> _QueryResult:
+            nonlocal result_message, captured_structured_output_input
             try:
                 async for message in query(prompt=prompt, options=options):
                     if isinstance(message, ResultMessage):
                         result_message = message
                     else:
+                        # Capture StructuredOutput tool input from AssistantMessage
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if (
+                                    isinstance(block, ToolUseBlock)
+                                    and block.name == _STRUCTURED_OUTPUT_TOOL_NAME
+                                ):
+                                    captured_structured_output_input = block.input
                         # Invoke callback for intermediate messages
                         await self._invoke_callback(message)
             except Exception as e:
@@ -504,21 +529,27 @@ class ClaudeCodeModel(Model):
                     error_type="invalid_response",
                     recoverable=False,
                 )
-            return result_message
+            return _QueryResult(
+                result_message=result_message,
+                captured_structured_output_input=captured_structured_output_input,
+            )
 
         # Use anyio.move_on_after for timeout handling
         with anyio.move_on_after(timeout) as cancel_scope:
-            result = await run_query()
+            query_result = await run_query()
+            result = query_result.result_message
             logger.debug(
                 "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
-                "is_error=%s, input_tokens=%d, output_tokens=%d",
+                "is_error=%s, input_tokens=%d, output_tokens=%d, "
+                "has_captured_structured_output=%s",
                 result.num_turns,
                 result.duration_ms,
                 result.is_error,
                 result.usage.get("input_tokens", 0) if result.usage else 0,
                 result.usage.get("output_tokens", 0) if result.usage else 0,
+                query_result.captured_structured_output_input is not None,
             )
-            return result
+            return query_result
 
         if cancel_scope.cancelled_caught:
             raise CLIExecutionError(
@@ -599,6 +630,42 @@ class ClaudeCodeModel(Model):
         )
 
         return parameters_value
+
+    def _try_recover_from_captured_tool_input(
+        self,
+        captured_input: dict[str, JsonValue] | None,
+    ) -> dict[str, JsonValue] | None:
+        """Try to recover structured output from captured ToolUseBlock input.
+
+        When error_max_structured_output_retries occurs and result.result is empty,
+        we can still recover by extracting the structured output from the ToolUseBlock
+        input captured from AssistantMessage during the query.
+
+        Args:
+            captured_input: The captured StructuredOutput tool input dict.
+
+        Returns:
+            Unwrapped dict if recovery succeeds, None otherwise.
+        """
+        if captured_input is None:
+            return None
+
+        if not isinstance(captured_input, dict):
+            return None
+
+        # Check for {"parameters": {...}} or {"parameter": {...}} wrapper
+        keys = list(captured_input.keys())
+        if keys == ["parameters"]:
+            parameters_value = captured_input["parameters"]
+            if isinstance(parameters_value, dict):
+                return parameters_value
+        elif keys == ["parameter"]:
+            parameters_value = captured_input["parameter"]
+            if isinstance(parameters_value, dict):
+                return parameters_value
+
+        # No wrapper - return captured input directly if it's a dict
+        return captured_input
 
     def _result_message_to_cli_response(self, result: ResultMessage) -> CLIResponse:
         """Convert ResultMessage to CLIResponse.
@@ -714,7 +781,10 @@ class ClaudeCodeModel(Model):
         )
 
         # Execute SDK query
-        result = await self._execute_sdk_query(user_prompt, options, settings.timeout)
+        query_result = await self._execute_sdk_query(
+            user_prompt, options, settings.timeout
+        )
+        result = query_result.result_message
 
         # Check for error response from SDK
         if result.is_error:
@@ -728,7 +798,7 @@ class ClaudeCodeModel(Model):
 
         # Check for structured output extraction failure
         if result.subtype == "error_max_structured_output_retries":
-            # Try to recover by unwrapping parameters wrapper
+            # 1. Try to recover from result (existing method)
             unwrapped = self._try_unwrap_parameters_wrapper(result)
             if unwrapped is not None:
                 logger.info(
@@ -742,25 +812,41 @@ class ClaudeCodeModel(Model):
                 result.structured_output = unwrapped
                 # Recovery successful - continue to normal response processing below
             else:
-                # Recovery failed - raise original error
-                logger.error(
-                    "Structured output failed after maximum retries: "
-                    "session_id=%s, num_turns=%s, duration_ms=%s. "
-                    "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
-                    result.session_id,
-                    result.num_turns,
-                    result.duration_ms,
-                    result.session_id,
+                # 2. Try to recover from captured ToolUseBlock input
+                recovered = self._try_recover_from_captured_tool_input(
+                    query_result.captured_structured_output_input
                 )
-                raise StructuredOutputError(
-                    f"Structured output failed after maximum retries. "
-                    f"The model returned output that did not match the required schema. "
-                    f"Session: {result.session_id}, Turns: {result.num_turns}, "
-                    f"Duration: {result.duration_ms}ms",
-                    session_id=result.session_id,
-                    num_turns=result.num_turns,
-                    duration_ms=result.duration_ms,
-                )
+                if recovered is not None:
+                    logger.info(
+                        "Recovered from error_max_structured_output_retries using "
+                        "captured ToolUseBlock input: session_id=%s, num_turns=%s, "
+                        "duration_ms=%s",
+                        result.session_id,
+                        result.num_turns,
+                        result.duration_ms,
+                    )
+                    result.structured_output = recovered
+                    # Recovery successful - continue to normal response processing below
+                else:
+                    # Recovery failed - raise original error
+                    logger.error(
+                        "Structured output failed after maximum retries: "
+                        "session_id=%s, num_turns=%s, duration_ms=%s. "
+                        "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
+                        result.session_id,
+                        result.num_turns,
+                        result.duration_ms,
+                        result.session_id,
+                    )
+                    raise StructuredOutputError(
+                        f"Structured output failed after maximum retries. "
+                        f"The model returned output that did not match the required schema. "
+                        f"Session: {result.session_id}, Turns: {result.num_turns}, "
+                        f"Duration: {result.duration_ms}ms",
+                        session_id=result.session_id,
+                        num_turns=result.num_turns,
+                        duration_ms=result.duration_ms,
+                    )
 
         # Warn about unknown error subtypes for future SDK compatibility
         if (

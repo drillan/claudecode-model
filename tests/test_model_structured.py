@@ -943,3 +943,370 @@ class TestStructuredOutputRecovery:
             content = response.parts[0].content  # type: ignore[union-attr]
             parsed = json.loads(content)  # type: ignore[arg-type]
             assert parsed == {"name": "test", "score": 95}
+
+
+class TestStructuredOutputRecoveryFromCapturedInput:
+    """Tests for recovery from captured ToolUseBlock input.
+
+    When error_max_structured_output_retries occurs and ResultMessage.result is empty,
+    we can still recover by extracting the structured output from the ToolUseBlock
+    input captured from AssistantMessage during the query.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_captured_tool_input(
+        self,
+    ) -> None:
+        """Should recover using captured ToolUseBlock input when result is empty."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # AssistantMessage with StructuredOutput ToolUseBlock containing the actual data
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-123",
+                    name="StructuredOutput",
+                    input={"parameters": {"name": "test", "score": 95}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        # ResultMessage with empty result (the typical error_max_structured_output_retries case)
+        error_result = create_mock_result_message(
+            result="",  # Empty result - recovery from result fails
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should recover from captured ToolUseBlock input
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test", "score": 95}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_captured_tool_input_singular(
+        self,
+    ) -> None:
+        """Should recover using captured ToolUseBlock input with singular 'parameter'."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock with singular "parameter" wrapper
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-456",
+                    name="StructuredOutput",
+                    input={"parameter": {"name": "test-singular"}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test-singular"}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_captured_tool_input_no_wrapper(
+        self,
+    ) -> None:
+        """Should recover using captured ToolUseBlock input without wrapper."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock without parameters/parameter wrapper (direct data)
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-789",
+                    name="StructuredOutput",
+                    input={"name": "direct-data"},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "direct-data"}
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_no_captured_tool_input(self) -> None:
+        """Should raise StructuredOutputError when no ToolUseBlock was captured."""
+        from claudecode_model.exceptions import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # Only ResultMessage, no AssistantMessage with ToolUseBlock
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model.request(messages, None, params)
+
+            assert "maximum retries" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_result_recovery_takes_priority_over_captured_tool_input(
+        self,
+    ) -> None:
+        """Result-based recovery should take priority over captured ToolUseBlock."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock with different data
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-priority",
+                    name="StructuredOutput",
+                    input={"parameters": {"name": "from-tool-use"}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        # ResultMessage with parameters wrapper in result (should take priority)
+        error_result = create_mock_result_message(
+            result='{"parameters": {"name": "from-result"}}',
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            # Should use result-based recovery (priority)
+            assert parsed == {"name": "from-result"}
+
+    @pytest.mark.asyncio
+    async def test_logs_info_on_successful_recovery_from_captured_tool_input(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log INFO when recovery from captured ToolUseBlock succeeds."""
+        import logging
+
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-log-test",
+                    name="StructuredOutput",
+                    input={"parameters": {"name": "log-test"}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+            session_id="captured-recovery-session",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
+            with patch("claudecode_model.model.query", mock_query):
+                await model.request(messages, None, params)
+
+        # Find the recovery log message
+        recovery_logs = [
+            r
+            for r in caplog.records
+            if "recovered" in r.message.lower() and "captured" in r.message.lower()
+        ]
+        assert len(recovery_logs) == 1
+        assert "captured-recovery-session" in recovery_logs[0].message

@@ -18,7 +18,7 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.tools import ToolDefinition
 
 from claudecode_model.exceptions import ToolNotFoundError, ToolsetNotRegisteredError
-from claudecode_model.model import ClaudeCodeModel
+from claudecode_model.model import ClaudeCodeModel, _QueryResult
 
 from .conftest import create_mock_result_message
 
@@ -107,9 +107,12 @@ class TestClaudeCodeModelRequest:
 
         async def mock_execute_sdk_query(
             prompt: str, options: ClaudeAgentOptions, timeout: float
-        ) -> ResultMessage:
+        ) -> _QueryResult:
             captured_timeouts.append(timeout)
-            return mock_result_message
+            return _QueryResult(
+                result_message=mock_result_message,
+                captured_structured_output_input=None,
+            )
 
         with patch.object(model, "_execute_sdk_query", mock_execute_sdk_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
@@ -243,10 +246,13 @@ class TestClaudeCodeModelRequest:
 
         async def mock_execute_sdk_query(
             prompt: str, options: ClaudeAgentOptions, timeout: float
-        ) -> ResultMessage:
+        ) -> _QueryResult:
             captured_options.append(options)
             captured_timeouts.append(timeout)
-            return mock_result_message
+            return _QueryResult(
+                result_message=mock_result_message,
+                captured_structured_output_input=None,
+            )
 
         with patch.object(model, "_execute_sdk_query", mock_execute_sdk_query):
             await model.request(messages, settings, params)  # type: ignore[arg-type]
