@@ -541,16 +541,17 @@ class ClaudeCodeModel(Model):
     def _try_unwrap_parameters_wrapper(
         self, result: ResultMessage
     ) -> dict[str, JsonValue] | None:
-        """Try to unwrap {"parameters": {...}} format from result string.
+        """Try to unwrap {"parameters": {...}} or {"parameter": {...}} format.
 
         Some models wrap structured output in a parameters envelope. This method
         detects and unwraps this format when structured_output is not already set.
+        Supports both plural ("parameters") and singular ("parameter") forms.
 
         Args:
             result: ResultMessage from Claude Agent SDK.
 
         Returns:
-            Unwrapped dict if parameters wrapper detected, None otherwise.
+            Unwrapped dict if parameters/parameter wrapper detected, None otherwise.
         """
         # Only process if structured_output is not already set
         if result.structured_output is not None:
@@ -572,21 +573,27 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}} format (single key)
+        # Check for {"parameters": {...}} or {"parameter": {...}} format (single key)
         if not isinstance(parsed, dict):
             return None
 
-        if list(parsed.keys()) != ["parameters"]:
+        keys = list(parsed.keys())
+        if keys == ["parameters"]:
+            wrapper_key = "parameters"
+        elif keys == ["parameter"]:
+            wrapper_key = "parameter"
+        else:
             return None
 
-        parameters_value = parsed["parameters"]
+        parameters_value = parsed[wrapper_key]
         if not isinstance(parameters_value, dict):
             return None
 
         # Log info about automatic unwrapping
         logger.info(
             "Detected and unwrapped parameters wrapper in result. "
-            "session_id=%s, num_turns=%s",
+            "wrapper_key=%s, session_id=%s, num_turns=%s",
+            wrapper_key,
             result.session_id,
             result.num_turns,
         )
