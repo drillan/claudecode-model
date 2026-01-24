@@ -64,6 +64,8 @@ class _ExtractedSettings(NamedTuple):
     append_system_prompt: str | None
     max_turns: int | None
     working_directory: str | None
+    continue_conversation: bool
+    resume: str | None
 
 
 class ClaudeCodeModel(Model):
@@ -80,6 +82,7 @@ class ClaudeCodeModel(Model):
         permission_mode: str | None = None,
         max_turns: int | None = None,
         message_callback: MessageCallbackType | None = None,
+        continue_conversation: bool = False,
     ) -> None:
         self._model_name = model_name
         self._working_directory = working_directory
@@ -89,6 +92,7 @@ class ClaudeCodeModel(Model):
         self._permission_mode = permission_mode
         self._max_turns = max_turns
         self._message_callback = message_callback
+        self._continue_conversation = continue_conversation
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
@@ -96,7 +100,8 @@ class ClaudeCodeModel(Model):
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
             "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
-            "permission_mode=%s, max_turns=%s, has_message_callback=%s",
+            "permission_mode=%s, max_turns=%s, has_message_callback=%s, "
+            "continue_conversation=%s",
             self._model_name,
             self._working_directory,
             self._timeout,
@@ -105,6 +110,7 @@ class ClaudeCodeModel(Model):
             self._permission_mode,
             self._max_turns,
             self._message_callback is not None,
+            self._continue_conversation,
         )
 
     @property
@@ -237,7 +243,8 @@ class ClaudeCodeModel(Model):
             _ExtractedSettings with extracted values, falling back to instance defaults.
 
         Raises:
-            ValueError: If max_budget_usd is negative or max_turns is non-positive.
+            ValueError: If max_budget_usd is negative, max_turns is non-positive,
+                or both resume and continue_conversation are specified.
             TypeError: If working_directory has invalid type.
         """
         timeout = self._timeout
@@ -245,6 +252,8 @@ class ClaudeCodeModel(Model):
         append_system_prompt: str | None = None
         max_turns: int | None = self._max_turns
         working_directory: str | None = self._working_directory
+        continue_conversation: bool = self._continue_conversation
+        resume: str | None = None
 
         if model_settings is None:
             return _ExtractedSettings(
@@ -253,6 +262,8 @@ class ClaudeCodeModel(Model):
                 append_system_prompt=append_system_prompt,
                 max_turns=max_turns,
                 working_directory=working_directory,
+                continue_conversation=continue_conversation,
+                resume=resume,
             )
 
         timeout_value = model_settings.get("timeout")
@@ -319,12 +330,44 @@ class ClaudeCodeModel(Model):
                 )
             working_directory = wd_value
 
+        continue_conversation_value = model_settings.get("continue_conversation")
+        if continue_conversation_value is not None:
+            if isinstance(continue_conversation_value, bool):
+                continue_conversation = continue_conversation_value
+            else:
+                logger.warning(
+                    "model_settings 'continue_conversation' has invalid type %s, "
+                    "expected bool. Ignoring this setting.",
+                    type(continue_conversation_value).__name__,
+                )
+
+        resume_value = model_settings.get("resume")
+        if resume_value is not None:
+            if isinstance(resume_value, str):
+                resume = resume_value
+            else:
+                logger.warning(
+                    "model_settings 'resume' has invalid type %s, "
+                    "expected str. Ignoring this setting.",
+                    type(resume_value).__name__,
+                )
+
+        # Validate mutual exclusion of resume and continue_conversation
+        if resume is not None and continue_conversation:
+            raise ValueError(
+                "resume and continue_conversation cannot be used together. "
+                "Use resume to continue a specific session by ID, or "
+                "continue_conversation to continue the most recent session."
+            )
+
         return _ExtractedSettings(
             timeout=timeout,
             max_budget_usd=max_budget_usd,
             append_system_prompt=append_system_prompt,
             max_turns=max_turns,
             working_directory=working_directory,
+            continue_conversation=continue_conversation,
+            resume=resume,
         )
 
     def _build_agent_options(
@@ -335,6 +378,8 @@ class ClaudeCodeModel(Model):
         max_turns: int | None = None,
         working_directory: str | None = None,
         json_schema: dict[str, JsonValue] | None = None,
+        continue_conversation: bool = False,
+        resume: str | None = None,
     ) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions from current parameters.
 
@@ -345,6 +390,8 @@ class ClaudeCodeModel(Model):
             max_turns: Maximum number of turns.
             working_directory: Working directory for execution.
             json_schema: JSON schema for structured output.
+            continue_conversation: Continue from the last conversation session.
+            resume: Session ID to resume.
 
         Returns:
             ClaudeAgentOptions configured with the provided parameters.
@@ -383,6 +430,8 @@ class ClaudeCodeModel(Model):
             system_prompt=effective_system_prompt,
             output_format=output_format,
             mcp_servers=self._mcp_servers,  # type: ignore[arg-type]
+            continue_conversation=continue_conversation,
+            resume=resume,
         )
 
     async def _execute_sdk_query(
@@ -638,6 +687,8 @@ class ClaudeCodeModel(Model):
             max_turns=effective_max_turns,
             working_directory=settings.working_directory,
             json_schema=json_schema,
+            continue_conversation=settings.continue_conversation,
+            resume=settings.resume,
         )
 
         # Execute SDK query
@@ -903,6 +954,8 @@ class ClaudeCodeModel(Model):
             max_turns=effective_max_turns,
             working_directory=settings.working_directory,
             json_schema=json_schema,
+            continue_conversation=settings.continue_conversation,
+            resume=settings.resume,
         )
 
         # Stream messages with timeout handling and SDK exception conversion

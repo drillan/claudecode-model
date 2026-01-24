@@ -38,12 +38,17 @@ class ClaudeCodeModelSettings(ModelSettings, total=False):
         max_turns: Maximum number of turns for the CLI execution.
         working_directory: Working directory for the CLI execution.
             Overrides the value set in __init__ for this request.
+        continue_conversation: Continue from the last conversation session.
+            Overrides the value set in __init__ for this request.
+        resume: Session ID to resume. Cannot be used together with continue_conversation.
     """
 
     max_budget_usd: float
     append_system_prompt: str
     max_turns: int
     working_directory: str
+    continue_conversation: bool
+    resume: str
 
 
 class ServerToolUse(BaseModel):
