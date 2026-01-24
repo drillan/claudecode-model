@@ -609,6 +609,7 @@ class ClaudeCodeModel(Model):
         Raises:
             ValueError: If no user prompt is found in messages.
             CLIExecutionError: If SDK execution fails or times out.
+            StructuredOutputError: If structured output extraction fails after max retries.
         """
         logger.debug(
             "_execute_request started: num_messages=%d, has_model_settings=%s, "
@@ -666,7 +667,7 @@ class ClaudeCodeModel(Model):
                 )
                 # Update result's structured_output for downstream processing
                 result.structured_output = unwrapped
-                # Continue to normal response processing (line 689)
+                # Recovery successful - continue to normal response processing below
             else:
                 # Recovery failed - raise original error
                 logger.error(
