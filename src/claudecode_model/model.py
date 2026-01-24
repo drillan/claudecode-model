@@ -83,6 +83,10 @@ class _QueryResult(NamedTuple):
 # Tool name used by Claude Agent SDK for structured output
 _STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput"
 
+# Timeout in seconds for cleanup operations when query times out.
+# This allows aclose() to complete gracefully without blocking indefinitely.
+_CLEANUP_TIMEOUT_SECONDS = 5.0
+
 
 class ClaudeCodeModel(Model):
     """pydantic-ai Model implementation using Claude Agent SDK."""
@@ -495,11 +499,13 @@ class ClaudeCodeModel(Model):
 
         result_message: ResultMessage | None = None
         captured_structured_output_input: dict[str, JsonValue] | None = None
+        query_generator: AsyncIterator[Message] | None = None
 
         async def run_query() -> _QueryResult:
-            nonlocal result_message, captured_structured_output_input
+            nonlocal result_message, captured_structured_output_input, query_generator
             try:
-                async for message in query(prompt=prompt, options=options):
+                query_generator = query(prompt=prompt, options=options)
+                async for message in query_generator:
                     if isinstance(message, ResultMessage):
                         result_message = message
                     else:
@@ -555,13 +561,7 @@ class ClaudeCodeModel(Model):
             return query_result
 
         if cancel_scope.cancelled_caught:
-            raise CLIExecutionError(
-                f"SDK query timed out after {timeout} seconds",
-                exit_code=TIMEOUT_EXIT_CODE,
-                stderr="Query was cancelled due to timeout",
-                error_type="timeout",
-                recoverable=True,
-            )
+            await self._cleanup_query_generator_on_timeout(query_generator, timeout)
 
         # This should never be reached, but satisfy type checker
         raise CLIExecutionError(  # pragma: no cover
@@ -570,6 +570,45 @@ class ClaudeCodeModel(Model):
             stderr="",
             error_type="unknown",
             recoverable=False,
+        )
+
+    async def _cleanup_query_generator_on_timeout(
+        self,
+        query_generator: AsyncIterator[Message] | None,
+        timeout: float,
+    ) -> None:
+        """Clean up async generator and raise timeout error.
+
+        Closes the async generator gracefully to ensure subprocess termination
+        when a timeout occurs. Logs warnings if cleanup fails or times out.
+
+        Args:
+            query_generator: The async generator to close, or None.
+            timeout: The original timeout value (for error message).
+
+        Raises:
+            CLIExecutionError: Always raises with timeout error_type.
+        """
+        if query_generator is not None and hasattr(query_generator, "aclose"):
+            with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
+                try:
+                    await query_generator.aclose()  # type: ignore[union-attr]
+                except Exception:
+                    logger.warning(
+                        "Failed to close query generator during timeout cleanup",
+                        exc_info=True,
+                    )
+            if cleanup_scope.cancelled_caught:
+                logger.warning(
+                    "Query generator cleanup timed out after %s seconds",
+                    _CLEANUP_TIMEOUT_SECONDS,
+                )
+        raise CLIExecutionError(
+            f"SDK query timed out after {timeout} seconds",
+            exit_code=TIMEOUT_EXIT_CODE,
+            stderr="Query was cancelled due to timeout",
+            error_type="timeout",
+            recoverable=True,
         )
 
     def _try_unwrap_parameters_wrapper(
@@ -1079,9 +1118,11 @@ class ClaudeCodeModel(Model):
         )
 
         # Stream messages with timeout handling and SDK exception conversion
+        query_generator: AsyncIterator[Message] | None = None
         with anyio.move_on_after(settings.timeout) as cancel_scope:
             try:
-                async for message in query(prompt=user_prompt, options=options):
+                query_generator = query(prompt=user_prompt, options=options)
+                async for message in query_generator:
                     yield message
             except Exception as e:
                 raise CLIExecutionError(
@@ -1093,12 +1134,8 @@ class ClaudeCodeModel(Model):
                 ) from e
 
         if cancel_scope.cancelled_caught:
-            raise CLIExecutionError(
-                f"SDK query timed out after {settings.timeout} seconds",
-                exit_code=TIMEOUT_EXIT_CODE,
-                stderr="Query was cancelled due to timeout",
-                error_type="timeout",
-                recoverable=True,
+            await self._cleanup_query_generator_on_timeout(
+                query_generator, settings.timeout
             )
 
     def set_agent_toolsets(
