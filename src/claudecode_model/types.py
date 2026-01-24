@@ -40,6 +40,7 @@ class ClaudeCodeModelSettings(ModelSettings, total=False):
             Overrides the value set in __init__ for this request.
         continue_conversation: Continue from the last conversation session.
             Overrides the value set in __init__ for this request.
+            Cannot be used together with resume.
         resume: Session ID to resume. Cannot be used together with continue_conversation.
     """
 

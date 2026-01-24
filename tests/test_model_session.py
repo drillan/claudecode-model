@@ -103,6 +103,35 @@ class TestClaudeCodeModelContinueConversationFromModelSettings:
             assert captured_options[0].continue_conversation is True
 
     @pytest.mark.asyncio
+    async def test_model_settings_overrides_init_true_to_false(
+        self, mock_result_message: ResultMessage
+    ) -> None:
+        """model_settings continue_conversation=False should override init=True."""
+        model = ClaudeCodeModel(continue_conversation=True)
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"continue_conversation": False}
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, settings, params)  # type: ignore[arg-type]
+
+            assert len(captured_options) == 1
+            assert captured_options[0].continue_conversation is False
+
+    @pytest.mark.asyncio
     async def test_uses_init_when_not_in_model_settings(
         self, mock_result_message: ResultMessage
     ) -> None:
@@ -295,3 +324,70 @@ class TestClaudeCodeModelStreamMessagesWithSessionOptions:
 
             assert len(captured_options) == 1
             assert captured_options[0].resume == "session-456"
+
+
+class TestClaudeCodeModelRequestWithMetadataSessionOptions:
+    """Tests for request_with_metadata with session options."""
+
+    @pytest.fixture
+    def mock_result_message(self) -> ResultMessage:
+        """Return a mock ResultMessage."""
+        return create_mock_result_message()
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_uses_continue_conversation(
+        self, mock_result_message: ResultMessage
+    ) -> None:
+        """request_with_metadata should use continue_conversation from model_settings."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"continue_conversation": True}
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request_with_metadata(messages, settings, params)  # type: ignore[arg-type]
+
+            assert len(captured_options) == 1
+            assert captured_options[0].continue_conversation is True
+
+    @pytest.mark.asyncio
+    async def test_request_with_metadata_uses_resume(
+        self, mock_result_message: ResultMessage
+    ) -> None:
+        """request_with_metadata should use resume from model_settings."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings = {"resume": "session-789"}
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result_message
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request_with_metadata(messages, settings, params)  # type: ignore[arg-type]
+
+            assert len(captured_options) == 1
+            assert captured_options[0].resume == "session-789"

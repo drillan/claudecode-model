@@ -84,6 +84,21 @@ class ClaudeCodeModel(Model):
         message_callback: MessageCallbackType | None = None,
         continue_conversation: bool = False,
     ) -> None:
+        """Initialize ClaudeCodeModel.
+
+        Args:
+            model_name: The Claude model to use (e.g., "claude-sonnet-4-5").
+            working_directory: Working directory for CLI execution.
+            timeout: Request timeout in seconds.
+            allowed_tools: List of allowed tool names for the agent.
+            disallowed_tools: List of disallowed tool names for the agent.
+            permission_mode: Permission mode for tool execution.
+            max_turns: Maximum number of turns for the CLI execution.
+            message_callback: Callback for intermediate messages during execution.
+            continue_conversation: Continue from the last conversation session.
+                Can be overridden per-request via model_settings.
+                Cannot be used together with resume (set via model_settings).
+        """
         self._model_name = model_name
         self._working_directory = working_directory
         self._timeout = timeout
