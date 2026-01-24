@@ -519,6 +519,20 @@ class TestParametersWrapperUnwrap:
 
         assert unwrapped is None
 
+    def test_unwraps_parameter_singular_wrapper_when_structured_output_is_none(
+        self,
+    ) -> None:
+        """Should unwrap {"parameter": {...}} (singular) when structured_output is None."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameter": {"name": "test", "score": 95}}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"name": "test", "score": 95}
+
     def test_info_log_includes_session_info(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -538,6 +552,44 @@ class TestParametersWrapperUnwrap:
         assert len(caplog.records) == 1
         assert "parameters" in caplog.records[0].message.lower()
         assert "test-session-123" in caplog.records[0].message
+
+    def test_info_log_includes_wrapper_key_parameters(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log info with wrapper key 'parameters' when unwrapping plural form."""
+        import logging
+
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            structured_output=None,
+            session_id="plural-session",
+        )
+
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
+            model._try_unwrap_parameters_wrapper(result_message)
+
+        assert len(caplog.records) == 1
+        assert "wrapper_key=parameters" in caplog.records[0].message
+
+    def test_info_log_includes_wrapper_key_parameter(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log info with wrapper key 'parameter' when unwrapping singular form."""
+        import logging
+
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameter": {"name": "test"}}',
+            structured_output=None,
+            session_id="singular-session",
+        )
+
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
+            model._try_unwrap_parameters_wrapper(result_message)
+
+        assert len(caplog.records) == 1
+        assert "wrapper_key=parameter" in caplog.records[0].message
 
 
 class TestStructuredOutputRecovery:
@@ -827,3 +879,55 @@ class TestStructuredOutputRecovery:
         ]
         assert len(error_logs) == 1
         assert "failed-recovery-session" in error_logs[0].message
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_parameter_singular_wrapper(
+        self,
+    ) -> None:
+        """Should recover from error_max_retries with singular 'parameter' wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error_max_structured_output_retries with singular "parameter" wrapper
+        error_result = create_mock_result_message(
+            result='{"parameter": {"name": "test", "score": 95}}',
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should NOT raise StructuredOutputError - should recover
+            response = await model.request(messages, None, params)
+
+            # Verify the response contains the unwrapped content
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test", "score": 95}
