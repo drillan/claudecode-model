@@ -495,11 +495,13 @@ class ClaudeCodeModel(Model):
 
         result_message: ResultMessage | None = None
         captured_structured_output_input: dict[str, JsonValue] | None = None
+        query_generator: AsyncIterator[Message] | None = None
 
         async def run_query() -> _QueryResult:
-            nonlocal result_message, captured_structured_output_input
+            nonlocal result_message, captured_structured_output_input, query_generator
             try:
-                async for message in query(prompt=prompt, options=options):
+                query_generator = query(prompt=prompt, options=options)
+                async for message in query_generator:
                     if isinstance(message, ResultMessage):
                         result_message = message
                     else:
@@ -555,6 +557,14 @@ class ClaudeCodeModel(Model):
             return query_result
 
         if cancel_scope.cancelled_caught:
+            # Cleanup: close the async generator to ensure subprocess termination
+            # Note: SDK's query() returns AsyncIterator which may have aclose() method
+            # at runtime (if it's actually an AsyncGenerator). We check for the method
+            # to avoid type errors while ensuring proper cleanup.
+            if query_generator is not None and hasattr(query_generator, "aclose"):
+                # Use a short timeout for cleanup to avoid blocking indefinitely
+                with anyio.move_on_after(5.0):
+                    await query_generator.aclose()  # type: ignore[union-attr]
             raise CLIExecutionError(
                 f"SDK query timed out after {timeout} seconds",
                 exit_code=TIMEOUT_EXIT_CODE,
@@ -1079,9 +1089,11 @@ class ClaudeCodeModel(Model):
         )
 
         # Stream messages with timeout handling and SDK exception conversion
+        query_generator: AsyncIterator[Message] | None = None
         with anyio.move_on_after(settings.timeout) as cancel_scope:
             try:
-                async for message in query(prompt=user_prompt, options=options):
+                query_generator = query(prompt=user_prompt, options=options)
+                async for message in query_generator:
                     yield message
             except Exception as e:
                 raise CLIExecutionError(
@@ -1093,6 +1105,14 @@ class ClaudeCodeModel(Model):
                 ) from e
 
         if cancel_scope.cancelled_caught:
+            # Cleanup: close the async generator to ensure subprocess termination
+            # Note: SDK's query() returns AsyncIterator which may have aclose() method
+            # at runtime (if it's actually an AsyncGenerator). We check for the method
+            # to avoid type errors while ensuring proper cleanup.
+            if query_generator is not None and hasattr(query_generator, "aclose"):
+                # Use a short timeout for cleanup to avoid blocking indefinitely
+                with anyio.move_on_after(5.0):
+                    await query_generator.aclose()  # type: ignore[union-attr]
             raise CLIExecutionError(
                 f"SDK query timed out after {settings.timeout} seconds",
                 exit_code=TIMEOUT_EXIT_CODE,
