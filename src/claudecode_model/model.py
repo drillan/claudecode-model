@@ -503,7 +503,10 @@ class ClaudeCodeModel(Model):
                     if isinstance(message, ResultMessage):
                         result_message = message
                     else:
-                        # Capture StructuredOutput tool input from AssistantMessage
+                        # Capture StructuredOutput tool input from AssistantMessage.
+                        # Note: If multiple StructuredOutput blocks exist, only the last
+                        # one is retained. This is intentional as we only need the final
+                        # output for recovery purposes.
                         if isinstance(message, AssistantMessage):
                             for block in message.content:
                                 if (
@@ -651,6 +654,11 @@ class ClaudeCodeModel(Model):
             return None
 
         if not isinstance(captured_input, dict):
+            logger.debug(
+                "Captured StructuredOutput input is not a dict, skipping recovery: "
+                "type=%s",
+                type(captured_input).__name__,
+            )
             return None
 
         # Check for {"parameters": {...}} or {"parameter": {...}} wrapper
@@ -824,6 +832,10 @@ class ClaudeCodeModel(Model):
                         result.session_id,
                         result.num_turns,
                         result.duration_ms,
+                    )
+                    logger.warning(
+                        "Recovered output was not validated against JSON schema. "
+                        "pydantic-ai will validate the output downstream."
                     )
                     result.structured_output = recovered
                     # Recovery successful - continue to normal response processing below
