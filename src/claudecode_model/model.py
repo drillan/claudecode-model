@@ -654,24 +654,39 @@ class ClaudeCodeModel(Model):
 
         # Check for structured output extraction failure
         if result.subtype == "error_max_structured_output_retries":
-            logger.error(
-                "Structured output failed after maximum retries: "
-                "session_id=%s, num_turns=%s, duration_ms=%s. "
-                "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
-                result.session_id,
-                result.num_turns,
-                result.duration_ms,
-                result.session_id,
-            )
-            raise StructuredOutputError(
-                f"Structured output failed after maximum retries. "
-                f"The model returned output that did not match the required schema. "
-                f"Session: {result.session_id}, Turns: {result.num_turns}, "
-                f"Duration: {result.duration_ms}ms",
-                session_id=result.session_id,
-                num_turns=result.num_turns,
-                duration_ms=result.duration_ms,
-            )
+            # Try to recover by unwrapping parameters wrapper
+            unwrapped = self._try_unwrap_parameters_wrapper(result)
+            if unwrapped is not None:
+                logger.info(
+                    "Recovered from error_max_structured_output_retries by unwrapping "
+                    "parameters wrapper: session_id=%s, num_turns=%s, duration_ms=%s",
+                    result.session_id,
+                    result.num_turns,
+                    result.duration_ms,
+                )
+                # Update result's structured_output for downstream processing
+                result.structured_output = unwrapped
+                # Continue to normal response processing (line 689)
+            else:
+                # Recovery failed - raise original error
+                logger.error(
+                    "Structured output failed after maximum retries: "
+                    "session_id=%s, num_turns=%s, duration_ms=%s. "
+                    "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
+                    result.session_id,
+                    result.num_turns,
+                    result.duration_ms,
+                    result.session_id,
+                )
+                raise StructuredOutputError(
+                    f"Structured output failed after maximum retries. "
+                    f"The model returned output that did not match the required schema. "
+                    f"Session: {result.session_id}, Turns: {result.num_turns}, "
+                    f"Duration: {result.duration_ms}ms",
+                    session_id=result.session_id,
+                    num_turns=result.num_turns,
+                    duration_ms=result.duration_ms,
+                )
 
         # Warn about unknown error subtypes for future SDK compatibility
         if (
