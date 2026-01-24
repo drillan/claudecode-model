@@ -496,3 +496,112 @@ class TestClaudeCodeModelTimeoutCleanup:
         assert "timed out" in str(exc_info.value).lower()
         assert exc_info.value.error_type == "timeout"
         assert aclose_called, "aclose() should be called on the generator when timeout"
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_timeout_no_aclose_method(self) -> None:
+        """_execute_sdk_query should handle generators without aclose() method."""
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        class MockAsyncIteratorWithoutAclose:
+            """Mock async iterator without aclose() method."""
+
+            def __aiter__(self) -> "MockAsyncIteratorWithoutAclose":
+                return self
+
+            async def __anext__(self) -> object:
+                # Simulate a slow query that will timeout
+                await anyio.sleep(10)
+                raise StopAsyncIteration  # pragma: no cover
+
+        def mock_query(**kwargs: object) -> MockAsyncIteratorWithoutAclose:
+            return MockAsyncIteratorWithoutAclose()
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test prompt", options, timeout=0.1)
+
+        assert "timed out" in str(exc_info.value).lower()
+        assert exc_info.value.error_type == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_timeout_aclose_raises_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_execute_sdk_query should log warning when aclose() raises exception."""
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        class MockAsyncGeneratorWithFailingAclose:
+            """Mock async generator with aclose() that raises exception."""
+
+            def __aiter__(self) -> "MockAsyncGeneratorWithFailingAclose":
+                return self
+
+            async def __anext__(self) -> object:
+                await anyio.sleep(10)
+                raise StopAsyncIteration  # pragma: no cover
+
+            async def aclose(self) -> None:
+                raise RuntimeError("Failed to close generator")
+
+        def mock_query(**kwargs: object) -> MockAsyncGeneratorWithFailingAclose:
+            return MockAsyncGeneratorWithFailingAclose()
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            with patch("claudecode_model.model.query", mock_query):
+                with pytest.raises(CLIExecutionError) as exc_info:
+                    await model._execute_sdk_query("Test prompt", options, timeout=0.1)
+
+        assert "timed out" in str(exc_info.value).lower()
+        assert exc_info.value.error_type == "timeout"
+        assert any(
+            "Failed to close query generator" in record.message
+            for record in caplog.records
+        ), "Should log warning when aclose() fails"
+
+    @pytest.mark.asyncio
+    async def test_execute_sdk_query_timeout_aclose_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_execute_sdk_query should log warning when aclose() times out."""
+        from claudecode_model.model import _CLEANUP_TIMEOUT_SECONDS
+
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        aclose_started = False
+
+        class MockAsyncGeneratorWithSlowAclose:
+            """Mock async generator with slow aclose() that will timeout."""
+
+            def __aiter__(self) -> "MockAsyncGeneratorWithSlowAclose":
+                return self
+
+            async def __anext__(self) -> object:
+                await anyio.sleep(10)
+                raise StopAsyncIteration  # pragma: no cover
+
+            async def aclose(self) -> None:
+                nonlocal aclose_started
+                aclose_started = True
+                # Sleep longer than cleanup timeout
+                await anyio.sleep(_CLEANUP_TIMEOUT_SECONDS + 5)
+
+        def mock_query(**kwargs: object) -> MockAsyncGeneratorWithSlowAclose:
+            return MockAsyncGeneratorWithSlowAclose()
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            with patch("claudecode_model.model.query", mock_query):
+                with pytest.raises(CLIExecutionError) as exc_info:
+                    await model._execute_sdk_query("Test prompt", options, timeout=0.1)
+
+        assert "timed out" in str(exc_info.value).lower()
+        assert exc_info.value.error_type == "timeout"
+        assert aclose_started, "aclose() should be called"
+        assert any(
+            "cleanup timed out" in record.message.lower() for record in caplog.records
+        ), "Should log warning when aclose() times out"

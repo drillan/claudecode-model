@@ -83,6 +83,10 @@ class _QueryResult(NamedTuple):
 # Tool name used by Claude Agent SDK for structured output
 _STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput"
 
+# Timeout in seconds for cleanup operations when query times out.
+# This allows aclose() to complete gracefully without blocking indefinitely.
+_CLEANUP_TIMEOUT_SECONDS = 5.0
+
 
 class ClaudeCodeModel(Model):
     """pydantic-ai Model implementation using Claude Agent SDK."""
@@ -557,21 +561,7 @@ class ClaudeCodeModel(Model):
             return query_result
 
         if cancel_scope.cancelled_caught:
-            # Cleanup: close the async generator to ensure subprocess termination
-            # Note: SDK's query() returns AsyncIterator which may have aclose() method
-            # at runtime (if it's actually an AsyncGenerator). We check for the method
-            # to avoid type errors while ensuring proper cleanup.
-            if query_generator is not None and hasattr(query_generator, "aclose"):
-                # Use a short timeout for cleanup to avoid blocking indefinitely
-                with anyio.move_on_after(5.0):
-                    await query_generator.aclose()  # type: ignore[union-attr]
-            raise CLIExecutionError(
-                f"SDK query timed out after {timeout} seconds",
-                exit_code=TIMEOUT_EXIT_CODE,
-                stderr="Query was cancelled due to timeout",
-                error_type="timeout",
-                recoverable=True,
-            )
+            await self._cleanup_query_generator_on_timeout(query_generator, timeout)
 
         # This should never be reached, but satisfy type checker
         raise CLIExecutionError(  # pragma: no cover
@@ -580,6 +570,45 @@ class ClaudeCodeModel(Model):
             stderr="",
             error_type="unknown",
             recoverable=False,
+        )
+
+    async def _cleanup_query_generator_on_timeout(
+        self,
+        query_generator: AsyncIterator[Message] | None,
+        timeout: float,
+    ) -> None:
+        """Clean up async generator and raise timeout error.
+
+        Closes the async generator gracefully to ensure subprocess termination
+        when a timeout occurs. Logs warnings if cleanup fails or times out.
+
+        Args:
+            query_generator: The async generator to close, or None.
+            timeout: The original timeout value (for error message).
+
+        Raises:
+            CLIExecutionError: Always raises with timeout error_type.
+        """
+        if query_generator is not None and hasattr(query_generator, "aclose"):
+            with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
+                try:
+                    await query_generator.aclose()  # type: ignore[union-attr]
+                except Exception:
+                    logger.warning(
+                        "Failed to close query generator during timeout cleanup",
+                        exc_info=True,
+                    )
+            if cleanup_scope.cancelled_caught:
+                logger.warning(
+                    "Query generator cleanup timed out after %s seconds",
+                    _CLEANUP_TIMEOUT_SECONDS,
+                )
+        raise CLIExecutionError(
+            f"SDK query timed out after {timeout} seconds",
+            exit_code=TIMEOUT_EXIT_CODE,
+            stderr="Query was cancelled due to timeout",
+            error_type="timeout",
+            recoverable=True,
         )
 
     def _try_unwrap_parameters_wrapper(
@@ -1105,20 +1134,8 @@ class ClaudeCodeModel(Model):
                 ) from e
 
         if cancel_scope.cancelled_caught:
-            # Cleanup: close the async generator to ensure subprocess termination
-            # Note: SDK's query() returns AsyncIterator which may have aclose() method
-            # at runtime (if it's actually an AsyncGenerator). We check for the method
-            # to avoid type errors while ensuring proper cleanup.
-            if query_generator is not None and hasattr(query_generator, "aclose"):
-                # Use a short timeout for cleanup to avoid blocking indefinitely
-                with anyio.move_on_after(5.0):
-                    await query_generator.aclose()  # type: ignore[union-attr]
-            raise CLIExecutionError(
-                f"SDK query timed out after {settings.timeout} seconds",
-                exit_code=TIMEOUT_EXIT_CODE,
-                stderr="Query was cancelled due to timeout",
-                error_type="timeout",
-                recoverable=True,
+            await self._cleanup_query_generator_on_timeout(
+                query_generator, settings.timeout
             )
 
     def set_agent_toolsets(
