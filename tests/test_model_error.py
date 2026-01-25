@@ -180,11 +180,14 @@ class TestResultMessageToCliResponseEmptyResultWarning:
 
         When ResultMessage has empty result and no structured_output, a warning
         should be logged with debug info (is_error, num_turns, duration_ms, subtype).
+
+        Note: Uses "invalid_subtype" (not "error_*") because error_ prefixed subtypes
+        are now allowed to have empty results (Issue #86).
         """
         model = ClaudeCodeModel()
 
         result = ResultMessage(
-            subtype="error_subtype",
+            subtype="invalid_subtype",
             duration_ms=5000,
             duration_api_ms=4500,
             is_error=True,
@@ -203,7 +206,37 @@ class TestResultMessageToCliResponseEmptyResultWarning:
         assert "is_error=True" in caplog.text
         assert "num_turns=3" in caplog.text
         assert "duration_ms=5000" in caplog.text
-        assert "subtype=error_subtype" in caplog.text
+        assert "subtype=invalid_subtype" in caplog.text
+
+    def test_allows_empty_result_for_error_subtypes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_result_message_to_cli_response should allow empty result for error_ subtypes.
+
+        Error subtypes (e.g., error_max_turns) represent legitimate termination
+        conditions and should be allowed to have empty results (Issue #86).
+        """
+        model = ClaudeCodeModel()
+
+        result = ResultMessage(
+            subtype="error_max_turns",
+            duration_ms=5000,
+            duration_api_ms=4500,
+            is_error=True,
+            num_turns=10,
+            session_id="test-session",
+            result="",  # Empty result
+            usage={"input_tokens": 100, "output_tokens": 50},
+            structured_output=None,  # No structured output
+        )
+
+        with caplog.at_level(logging.WARNING):
+            cli_response = model._result_message_to_cli_response(result)
+
+        # Should succeed without raising ValueError
+        assert cli_response.subtype == "error_max_turns"
+        assert cli_response.result == ""
+        assert cli_response.structured_output is None
 
     def test_no_warning_when_result_is_present(
         self, caplog: pytest.LogCaptureFixture

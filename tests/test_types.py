@@ -1327,11 +1327,14 @@ class TestCLIResponseValidation:
         When result is empty and structured_output is None, the error message
         should include debug information (is_error, num_turns, duration_ms, subtype)
         to help diagnose the issue.
+
+        Note: Uses "invalid_subtype" (not "error_*") because error_ prefixed subtypes
+        are now allowed to have empty results (Issue #86).
         """
         with pytest.raises(ValueError) as exc_info:
             CLIResponse(
                 type="result",
-                subtype="error_subtype",
+                subtype="invalid_subtype",
                 is_error=True,
                 duration_ms=5000,
                 duration_api_ms=4500,
@@ -1351,7 +1354,7 @@ class TestCLIResponseValidation:
         assert "is_error=True" in error_message
         assert "num_turns=3" in error_message
         assert "duration_ms=5000" in error_message
-        assert "subtype=error_subtype" in error_message
+        assert "subtype=invalid_subtype" in error_message
 
     def test_to_model_response_with_errors(self) -> None:
         """to_model_response should work when errors are present."""
@@ -1423,6 +1426,129 @@ class TestCLIResponseValidation:
                 ),
                 errors=[1, 2, 3],  # type: ignore[list-item]
             )
+
+
+class TestCLIResponseErrorSubtypes:
+    """Tests for CLIResponse with error subtypes (Issue #86)."""
+
+    def test_accepts_empty_result_for_error_max_turns(self) -> None:
+        """CLIResponse should accept empty result when subtype is error_max_turns.
+
+        error_max_turns is a legitimate termination condition that may have empty result.
+        """
+        response = CLIResponse(
+            type="result",
+            subtype="error_max_turns",
+            is_error=True,
+            duration_ms=5000,
+            duration_api_ms=4500,
+            num_turns=10,
+            result="",
+            usage=CLIUsage(
+                input_tokens=1000,
+                output_tokens=500,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output=None,
+        )
+        assert response.subtype == "error_max_turns"
+        assert response.result == ""
+        assert response.structured_output is None
+
+    def test_accepts_empty_result_for_error_prefix_subtypes(self) -> None:
+        """CLIResponse should accept empty result for any error_* subtype.
+
+        All error_ prefixed subtypes are legitimate termination conditions.
+        """
+        error_subtypes = [
+            "error_max_turns",
+            "error_timeout",
+            "error_budget",
+            "error_permission",
+        ]
+        for subtype in error_subtypes:
+            response = CLIResponse(
+                type="result",
+                subtype=subtype,
+                is_error=True,
+                duration_ms=1000,
+                duration_api_ms=800,
+                num_turns=1,
+                result="",
+                usage=CLIUsage(
+                    input_tokens=100,
+                    output_tokens=50,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                structured_output=None,
+            )
+            assert response.subtype == subtype
+            assert response.result == ""
+
+    def test_still_rejects_empty_result_for_success_subtype(self) -> None:
+        """CLIResponse should still reject empty result for success subtype.
+
+        The existing validation for success subtype should remain unchanged.
+        """
+        with pytest.raises(ValueError, match="result.*structured_output"):
+            CLIResponse(
+                type="result",
+                subtype="success",
+                is_error=False,
+                duration_ms=1000,
+                duration_api_ms=800,
+                num_turns=1,
+                result="",
+                usage=CLIUsage(
+                    input_tokens=100,
+                    output_tokens=50,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                structured_output=None,
+            )
+
+    def test_accepts_error_subtype_with_nonempty_result(self) -> None:
+        """CLIResponse should accept error subtypes with non-empty result."""
+        response = CLIResponse(
+            type="result",
+            subtype="error_max_turns",
+            is_error=True,
+            duration_ms=5000,
+            duration_api_ms=4500,
+            num_turns=10,
+            result="Operation timed out after 10 turns",
+            usage=CLIUsage(
+                input_tokens=1000,
+                output_tokens=500,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output=None,
+        )
+        assert response.result == "Operation timed out after 10 turns"
+
+    def test_accepts_error_subtype_with_structured_output(self) -> None:
+        """CLIResponse should accept error subtypes with structured_output."""
+        response = CLIResponse(
+            type="result",
+            subtype="error_max_turns",
+            is_error=True,
+            duration_ms=5000,
+            duration_api_ms=4500,
+            num_turns=10,
+            result="",
+            usage=CLIUsage(
+                input_tokens=1000,
+                output_tokens=500,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            ),
+            structured_output={"partial": "data"},
+        )
+        assert response.structured_output == {"partial": "data"}
 
 
 class TestParseCLIResponseStructuredOutput:
