@@ -219,7 +219,14 @@ class CLIResponse(BaseModel):
 
         Prevents silent failures where both result is empty and structured_output is None.
         Includes debug information in error message to help diagnose the issue.
+
+        Note: Error subtypes (e.g., error_max_turns) are allowed to have empty results
+        as they represent legitimate termination conditions.
         """
+        # Allow empty results for error subtypes
+        if self.subtype.startswith("error_"):
+            return self
+
         if not self.result and self.structured_output is None:
             raise ValueError(
                 "Either result must be non-empty or structured_output must be provided. "
