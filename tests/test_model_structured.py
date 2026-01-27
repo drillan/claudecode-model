@@ -603,6 +603,51 @@ class TestParametersWrapperUnwrap:
         assert len(caplog.records) == 1
         assert "wrapper_key=parameter" in caplog.records[0].message
 
+    def test_unwraps_output_wrapper_when_structured_output_is_none(
+        self,
+    ) -> None:
+        """Should unwrap {"output": {...}} when structured_output is None."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"output": {"is_complete": false, "summary": "test"}}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"is_complete": False, "summary": "test"}
+
+    def test_does_not_unwrap_output_when_value_is_not_dict(self) -> None:
+        """Should NOT unwrap when 'output' value is not a dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"output": ["list", "value"]}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_logs_output_wrapper_key_on_unwrap(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log info with wrapper_key=output when unwrapping output form."""
+        import logging
+
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"output": {"name": "test"}}',
+            structured_output=None,
+            session_id="output-session",
+        )
+
+        with caplog.at_level(logging.INFO, logger="claudecode_model.model"):
+            model._try_unwrap_parameters_wrapper(result_message)
+
+        assert len(caplog.records) == 1
+        assert "wrapper_key=output" in caplog.records[0].message
+
 
 class TestStructuredOutputRecovery:
     """Tests for recovery from error_max_structured_output_retries.
@@ -944,6 +989,56 @@ class TestStructuredOutputRecovery:
             parsed = json.loads(content)  # type: ignore[arg-type]
             assert parsed == {"name": "test", "score": 95}
 
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_output_wrapper(
+        self,
+    ) -> None:
+        """Should recover from error_max_retries with 'output' wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "is_complete": {"type": "boolean"},
+                "summary": {"type": "string"},
+            },
+            "required": ["is_complete", "summary"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error_max_structured_output_retries with "output" wrapper
+        error_result = create_mock_result_message(
+            result='{"output": {"is_complete": false, "summary": "test"}}',
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"is_complete": False, "summary": "test"}
+
 
 class TestStructuredOutputRecoveryFromCapturedInput:
     """Tests for recovery from captured ToolUseBlock input.
@@ -1079,6 +1174,67 @@ class TestStructuredOutputRecoveryFromCapturedInput:
             content = response.parts[0].content  # type: ignore[union-attr]
             parsed = json.loads(content)  # type: ignore[arg-type]
             assert parsed == {"name": "test-singular"}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_retries_with_captured_tool_input_output_wrapper(
+        self,
+    ) -> None:
+        """Should recover using captured ToolUseBlock input with 'output' wrapper."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"is_complete": {"type": "boolean"}},
+            "required": ["is_complete"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock with "output" wrapper
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-output-wrapper",
+                    name="StructuredOutput",
+                    input={"output": {"is_complete": True}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"is_complete": True}
 
     @pytest.mark.asyncio
     async def test_recovers_from_error_max_retries_with_captured_tool_input_no_wrapper(
@@ -1369,6 +1525,55 @@ class TestErrorMaxTurnsStructuredOutputRecovery:
             content = response.parts[0].content  # type: ignore[union-attr]
             parsed = json.loads(content)  # type: ignore[arg-type]
             assert parsed == {"name": "test"}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_turns_with_output_wrapper(
+        self,
+    ) -> None:
+        """Should recover from error_max_turns by unwrapping output wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "is_complete": {"type": "boolean"},
+            },
+            "required": ["is_complete"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error_max_turns with "output" wrapper
+        error_result = create_mock_result_message(
+            result='{"output": {"is_complete": true}}',
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"is_complete": True}
 
     @pytest.mark.asyncio
     async def test_recovers_from_error_max_turns_with_json_schema_and_captured_input(
