@@ -687,7 +687,7 @@ class ClaudeCodeModel(Model):
     ) -> dict[str, JsonValue] | None:
         """Try to recover structured output from captured ToolUseBlock input.
 
-        When error_max_structured_output_retries occurs and result.result is empty,
+        When a structured output recovery subtype occurs and result.result is empty,
         we can still recover by extracting the structured output from the ToolUseBlock
         input captured from AssistantMessage during the query.
 
@@ -894,16 +894,17 @@ class ClaudeCodeModel(Model):
                 else:
                     # Recovery failed - raise original error
                     logger.error(
-                        "Structured output failed after maximum retries: "
+                        "Structured output recovery failed (%s): "
                         "session_id=%s, num_turns=%s, duration_ms=%s. "
                         "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
+                        result.subtype,
                         result.session_id,
                         result.num_turns,
                         result.duration_ms,
                         result.session_id,
                     )
                     raise StructuredOutputError(
-                        f"Structured output failed after maximum retries. "
+                        f"Structured output recovery failed ({result.subtype}). "
                         f"The model returned output that did not match the required schema. "
                         f"Session: {result.session_id}, Turns: {result.num_turns}, "
                         f"Duration: {result.duration_ms}ms",

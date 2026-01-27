@@ -706,7 +706,7 @@ class TestStructuredOutputRecovery:
             with pytest.raises(StructuredOutputError) as exc_info:
                 await model.request(messages, None, params)
 
-            assert "maximum retries" in str(exc_info.value).lower()
+            assert "recovery failed" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_raises_error_when_invalid_json_in_max_retries(self) -> None:
@@ -748,7 +748,7 @@ class TestStructuredOutputRecovery:
             with pytest.raises(StructuredOutputError) as exc_info:
                 await model.request(messages, None, params)
 
-            assert "maximum retries" in str(exc_info.value).lower()
+            assert "recovery failed" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_raises_error_when_empty_result_in_max_retries(self) -> None:
@@ -790,7 +790,7 @@ class TestStructuredOutputRecovery:
             with pytest.raises(StructuredOutputError) as exc_info:
                 await model.request(messages, None, params)
 
-            assert "maximum retries" in str(exc_info.value).lower()
+            assert "recovery failed" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_logs_info_on_successful_recovery(
@@ -887,7 +887,7 @@ class TestStructuredOutputRecovery:
 
         # Find the error log message
         error_logs = [
-            r for r in caplog.records if "structured output failed" in r.message.lower()
+            r for r in caplog.records if "recovery failed" in r.message.lower()
         ]
         assert len(error_logs) == 1
         assert "failed-recovery-session" in error_logs[0].message
@@ -1181,7 +1181,7 @@ class TestStructuredOutputRecoveryFromCapturedInput:
             with pytest.raises(StructuredOutputError) as exc_info:
                 await model.request(messages, None, params)
 
-            assert "maximum retries" in str(exc_info.value).lower()
+            assert "recovery failed" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_result_recovery_takes_priority_over_captured_tool_input(
@@ -1476,7 +1476,7 @@ class TestErrorMaxTurnsStructuredOutputRecovery:
             with pytest.raises(StructuredOutputError) as exc_info:
                 await model.request(messages, None, params)
 
-            assert "maximum retries" in str(exc_info.value).lower()
+            assert "recovery failed" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_error_max_turns_without_json_schema_passes_through(

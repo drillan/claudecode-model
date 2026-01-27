@@ -324,8 +324,8 @@ class TestStructuredOutputError:
                 await model._execute_request(messages, None, json_schema=json_schema)
 
         # Verify exception contains helpful information
-        assert "Structured output failed" in str(exc_info.value)
-        assert "maximum retries" in str(exc_info.value)
+        assert "recovery failed" in str(exc_info.value).lower()
+        assert "error_max_structured_output_retries" in str(exc_info.value)
         assert exc_info.value.session_id == "d5f9d990-27d2-4d6a-8925-cf7e043e6649"
         assert exc_info.value.num_turns == 6
         assert exc_info.value.duration_ms == 99031
