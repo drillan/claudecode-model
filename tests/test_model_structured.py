@@ -1310,3 +1310,205 @@ class TestStructuredOutputRecoveryFromCapturedInput:
         ]
         assert len(recovery_logs) == 1
         assert "captured-recovery-session" in recovery_logs[0].message
+
+
+class TestErrorMaxTurnsStructuredOutputRecovery:
+    """Tests for recovery from error_max_turns with structured output.
+
+    When the SDK returns error_max_turns with json_schema enabled, the same
+    2-stage recovery logic (parameters wrapper unwrap → captured ToolUseBlock)
+    should be applied, identical to error_max_structured_output_retries.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_turns_with_parameters_wrapper(
+        self,
+    ) -> None:
+        """Should recover from error_max_turns by unwrapping parameters wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # SDK returns error_max_turns but with valid parameters wrapper in result
+        error_result = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should NOT raise - should recover via parameters unwrap
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test"}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_error_max_turns_with_json_schema_and_captured_input(
+        self,
+    ) -> None:
+        """Should recover from error_max_turns using captured ToolUseBlock input."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # AssistantMessage with StructuredOutput ToolUseBlock
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-max-turns",
+                    name="StructuredOutput",
+                    input={"parameters": {"name": "captured-test"}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        # ResultMessage with empty result (error_max_turns)
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "captured-test"}
+
+    @pytest.mark.asyncio
+    async def test_raises_error_when_error_max_turns_with_json_schema_no_recovery(
+        self,
+    ) -> None:
+        """Should raise StructuredOutputError when error_max_turns has no recovery path."""
+        from claudecode_model.exceptions import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # Empty result, no captured ToolUseBlock
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model.request(messages, None, params)
+
+            assert "maximum retries" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_error_max_turns_without_json_schema_passes_through(
+        self,
+    ) -> None:
+        """Should pass through error_max_turns without recovery when no json_schema."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        # No json_schema (text mode)
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        # error_max_turns with some text result (no json_schema)
+        error_result = create_mock_result_message(
+            result="some text",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should NOT raise - passes through as normal response
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            assert content == "some text"
