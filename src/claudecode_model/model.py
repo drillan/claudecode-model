@@ -83,6 +83,14 @@ class _QueryResult(NamedTuple):
 # Tool name used by Claude Agent SDK for structured output
 _STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput"
 
+# Subtypes that trigger structured output recovery when json_schema is provided
+_STRUCTURED_OUTPUT_RECOVERY_SUBTYPES: frozenset[str] = frozenset(
+    {
+        "error_max_structured_output_retries",
+        "error_max_turns",
+    }
+)
+
 # Timeout in seconds for cleanup operations when query times out.
 # This allows aclose() to complete gracefully without blocking indefinitely.
 _CLEANUP_TIMEOUT_SECONDS = 5.0
@@ -679,7 +687,7 @@ class ClaudeCodeModel(Model):
     ) -> dict[str, JsonValue] | None:
         """Try to recover structured output from captured ToolUseBlock input.
 
-        When error_max_structured_output_retries occurs and result.result is empty,
+        When a structured output recovery subtype occurs and result.result is empty,
         we can still recover by extracting the structured output from the ToolUseBlock
         input captured from AssistantMessage during the query.
 
@@ -844,13 +852,17 @@ class ClaudeCodeModel(Model):
             )
 
         # Check for structured output extraction failure
-        if result.subtype == "error_max_structured_output_retries":
+        if (
+            result.subtype in _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
+            and json_schema is not None
+        ):
             # 1. Try to recover from result (existing method)
             unwrapped = self._try_unwrap_parameters_wrapper(result)
             if unwrapped is not None:
                 logger.info(
-                    "Recovered from error_max_structured_output_retries by unwrapping "
+                    "Recovered from %s by unwrapping "
                     "parameters wrapper: session_id=%s, num_turns=%s, duration_ms=%s",
+                    result.subtype,
                     result.session_id,
                     result.num_turns,
                     result.duration_ms,
@@ -865,9 +877,10 @@ class ClaudeCodeModel(Model):
                 )
                 if recovered is not None:
                     logger.info(
-                        "Recovered from error_max_structured_output_retries using "
+                        "Recovered from %s using "
                         "captured ToolUseBlock input: session_id=%s, num_turns=%s, "
                         "duration_ms=%s",
+                        result.subtype,
                         result.session_id,
                         result.num_turns,
                         result.duration_ms,
@@ -881,16 +894,17 @@ class ClaudeCodeModel(Model):
                 else:
                     # Recovery failed - raise original error
                     logger.error(
-                        "Structured output failed after maximum retries: "
+                        "Structured output recovery failed (%s): "
                         "session_id=%s, num_turns=%s, duration_ms=%s. "
                         "Debug session file: ~/.claude/projects/<project-hash>/%s.jsonl",
+                        result.subtype,
                         result.session_id,
                         result.num_turns,
                         result.duration_ms,
                         result.session_id,
                     )
                     raise StructuredOutputError(
-                        f"Structured output failed after maximum retries. "
+                        f"Structured output recovery failed ({result.subtype}). "
                         f"The model returned output that did not match the required schema. "
                         f"Session: {result.session_id}, Turns: {result.num_turns}, "
                         f"Duration: {result.duration_ms}ms",
@@ -904,6 +918,10 @@ class ClaudeCodeModel(Model):
             result.subtype
             and result.subtype.startswith("error_")
             and not result.is_error
+            and not (
+                result.subtype in _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
+                and json_schema is not None
+            )
         ):
             logger.warning(
                 "Unknown error subtype encountered: %s (session_id=%s)",

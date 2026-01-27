@@ -300,6 +300,9 @@ class TestStructuredOutputError:
             ModelRequest(parts=[UserPromptPart(content="Test")])
         ]
 
+        # json_schema is required for recovery block to be entered
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
         # Simulate SDK returning error_max_structured_output_retries
         error_result = ResultMessage(
             subtype="error_max_structured_output_retries",
@@ -318,11 +321,11 @@ class TestStructuredOutputError:
 
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(StructuredOutputError) as exc_info:
-                await model._execute_request(messages, None)
+                await model._execute_request(messages, None, json_schema=json_schema)
 
         # Verify exception contains helpful information
-        assert "Structured output failed" in str(exc_info.value)
-        assert "maximum retries" in str(exc_info.value)
+        assert "recovery failed" in str(exc_info.value).lower()
+        assert "error_max_structured_output_retries" in str(exc_info.value)
         assert exc_info.value.session_id == "d5f9d990-27d2-4d6a-8925-cf7e043e6649"
         assert exc_info.value.num_turns == 6
         assert exc_info.value.duration_ms == 99031
@@ -336,6 +339,9 @@ class TestStructuredOutputError:
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Test")])
         ]
+
+        # json_schema is required for recovery block to be entered
+        json_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
 
         error_result = ResultMessage(
             subtype="error_max_structured_output_retries",
@@ -355,7 +361,9 @@ class TestStructuredOutputError:
         with caplog.at_level(logging.ERROR):
             with patch("claudecode_model.model.query", mock_query):
                 with pytest.raises(StructuredOutputError):
-                    await model._execute_request(messages, None)
+                    await model._execute_request(
+                        messages, None, json_schema=json_schema
+                    )
 
         # Verify error log contains session info for debugging
         assert "session_id=test-session-id-12345" in caplog.text
