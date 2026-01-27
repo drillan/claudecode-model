@@ -669,7 +669,7 @@ class TestStructuredOutputRecovery:
         self,
     ) -> None:
         """Should raise StructuredOutputError when result doesn't have parameters wrapper."""
-        from claudecode_model.model import StructuredOutputError
+        from claudecode_model.exceptions import StructuredOutputError
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -711,7 +711,7 @@ class TestStructuredOutputRecovery:
     @pytest.mark.asyncio
     async def test_raises_error_when_invalid_json_in_max_retries(self) -> None:
         """Should raise StructuredOutputError when result is not valid JSON."""
-        from claudecode_model.model import StructuredOutputError
+        from claudecode_model.exceptions import StructuredOutputError
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -753,7 +753,7 @@ class TestStructuredOutputRecovery:
     @pytest.mark.asyncio
     async def test_raises_error_when_empty_result_in_max_retries(self) -> None:
         """Should raise StructuredOutputError when result is empty."""
-        from claudecode_model.model import StructuredOutputError
+        from claudecode_model.exceptions import StructuredOutputError
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
@@ -847,7 +847,7 @@ class TestStructuredOutputRecovery:
         """Should log ERROR when recovery fails."""
         import logging
 
-        from claudecode_model.model import StructuredOutputError
+        from claudecode_model.exceptions import StructuredOutputError
 
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
