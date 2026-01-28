@@ -2088,3 +2088,57 @@ class TestErrorDuringExecutionRecovery:
 
             content = response.parts[0].content  # type: ignore[union-attr]
             assert content == "some text"
+
+    @pytest.mark.asyncio
+    async def test_error_during_execution_with_is_error_raises_cli_error(
+        self,
+    ) -> None:
+        """Should raise CLIExecutionError when is_error=True, bypassing recovery.
+
+        When the SDK sets is_error=True, the error check fires before
+        the recovery logic. This test documents that is_error=True
+        takes precedence over structured output recovery.
+        """
+        from claudecode_model.exceptions import CLIExecutionError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # is_error=True means SDK reported a hard error, not a recovery candidate
+        error_result = create_mock_result_message(
+            result='{"parameters": {"name": "test"}}',
+            subtype="error_during_execution",
+            is_error=True,
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError):
+                await model.request(messages, None, params)
