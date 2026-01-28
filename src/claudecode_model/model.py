@@ -654,7 +654,7 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}} or {"parameter": {...}} format (single key)
+        # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} format (single key)
         if not isinstance(parsed, dict):
             return None
 
@@ -668,20 +668,20 @@ class ClaudeCodeModel(Model):
         else:
             return None
 
-        parameters_value = parsed[wrapper_key]
-        if not isinstance(parameters_value, dict):
+        wrapper_value = parsed[wrapper_key]
+        if not isinstance(wrapper_value, dict):
             return None
 
         # Log info about automatic unwrapping
         logger.info(
-            "Detected and unwrapped parameters wrapper in result. "
+            "Detected and unwrapped structured output wrapper in result. "
             "wrapper_key=%s, session_id=%s, num_turns=%s",
             wrapper_key,
             result.session_id,
             result.num_turns,
         )
 
-        return parameters_value
+        return wrapper_value
 
     def _try_recover_from_captured_tool_input(
         self,
@@ -714,17 +714,32 @@ class ClaudeCodeModel(Model):
         # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} wrapper
         keys = list(captured_input.keys())
         if keys == ["parameters"]:
-            parameters_value = captured_input["parameters"]
-            if isinstance(parameters_value, dict):
-                return parameters_value
+            wrapper_value = captured_input["parameters"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'parameters' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
         elif keys == ["parameter"]:
-            parameters_value = captured_input["parameter"]
-            if isinstance(parameters_value, dict):
-                return parameters_value
+            wrapper_value = captured_input["parameter"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'parameter' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
         elif keys == ["output"]:
-            output_value = captured_input["output"]
-            if isinstance(output_value, dict):
-                return output_value
+            wrapper_value = captured_input["output"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'output' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
 
         # No wrapper - return captured input directly if it's a dict
         return captured_input

@@ -1237,6 +1237,126 @@ class TestStructuredOutputRecoveryFromCapturedInput:
             assert parsed == {"is_complete": True}
 
     @pytest.mark.asyncio
+    async def test_returns_none_when_captured_tool_input_output_wrapper_value_is_not_dict(
+        self,
+    ) -> None:
+        """Should raise error when 'output' wrapper value is not a dict (e.g. list)."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        from claudecode_model.exceptions import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock with "output" wrapper but non-dict value
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-output-non-dict",
+                    name="StructuredOutput",
+                    input={"output": ["not", "a", "dict"]},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError):
+                await model.request(messages, None, params)
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_captured_tool_input_parameters_wrapper_value_is_not_dict(
+        self,
+    ) -> None:
+        """Should raise error when 'parameters' wrapper value is not a dict."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        from claudecode_model.exceptions import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        # ToolUseBlock with "parameters" wrapper but non-dict value
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-params-non-dict",
+                    name="StructuredOutput",
+                    input={"parameters": "not-a-dict"},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_structured_output_retries",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError):
+                await model.request(messages, None, params)
+
+    @pytest.mark.asyncio
     async def test_recovers_from_error_max_retries_with_captured_tool_input_no_wrapper(
         self,
     ) -> None:
