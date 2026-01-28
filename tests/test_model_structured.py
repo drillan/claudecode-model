@@ -649,13 +649,15 @@ class TestParametersWrapperUnwrap:
         assert "wrapper_key=output" in caplog.records[0].message
 
 
-RECOVERY_SUBTYPES = [
+RECOVERY_SUBTYPES: list[str] = [
     "error_max_structured_output_retries",
     "error_max_turns",
     "error_during_execution",
 ]
 
-PASSTHROUGH_SUBTYPES = [
+# error_max_structured_output_retries は json_schema が有効な場合のみ発生するため、
+# json_schema なしのパススルーテストには含まない
+PASSTHROUGH_SUBTYPES: list[str] = [
     "error_max_turns",
     "error_during_execution",
 ]
@@ -667,6 +669,12 @@ class TestStructuredOutputRecoveryParameterized:
     These tests verify that the same recovery logic works identically for
     error_max_structured_output_retries, error_max_turns, and error_during_execution.
     """
+
+    def test_recovery_subtypes_matches_production(self) -> None:
+        """RECOVERY_SUBTYPES should match production _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES."""
+        from claudecode_model.model import _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
+
+        assert set(RECOVERY_SUBTYPES) == _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("subtype", RECOVERY_SUBTYPES)
@@ -866,6 +874,7 @@ class TestStructuredOutputRecoveryParameterized:
                 await model.request(messages, None, params)
 
             assert "recovery failed" in str(exc_info.value).lower()
+            assert subtype in str(exc_info.value)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("subtype", PASSTHROUGH_SUBTYPES)
@@ -903,7 +912,7 @@ class TestStructuredOutputRecovery:
     """Tests for recovery from error_max_structured_output_retries.
 
     Individual tests that are specific to the error_max_structured_output_retries
-    subtype and not covered by the parameterized tests above.
+    subtype and not covered by TestStructuredOutputRecoveryParameterized.
     """
 
     @pytest.mark.asyncio
