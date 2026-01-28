@@ -465,7 +465,7 @@ class ClaudeCodeModel(Model):
         return ClaudeAgentOptions(
             model=self._model_name,
             cwd=effective_cwd,
-            allowed_tools=self._allowed_tools or [],
+            allowed_tools=self._allowed_tools,
             disallowed_tools=self._disallowed_tools or [],
             permission_mode=self._permission_mode,  # type: ignore[arg-type]
             max_turns=effective_max_turns,

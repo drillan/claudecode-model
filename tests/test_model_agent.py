@@ -29,7 +29,7 @@ class TestClaudeCodeModelBuildAgentOptions:
         assert isinstance(options, ClaudeAgentOptions)
         assert options.model == DEFAULT_MODEL
         assert options.cwd is None
-        assert options.allowed_tools == []
+        assert options.allowed_tools is None
         assert options.disallowed_tools == []
         assert options.permission_mode is None
         assert options.max_turns is None
