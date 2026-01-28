@@ -29,7 +29,7 @@ class TestClaudeCodeModelBuildAgentOptions:
         assert isinstance(options, ClaudeAgentOptions)
         assert options.model == DEFAULT_MODEL
         assert options.cwd is None
-        assert options.allowed_tools == []
+        assert options.allowed_tools is None
         assert options.disallowed_tools == []
         assert options.permission_mode is None
         assert options.max_turns is None
@@ -56,6 +56,14 @@ class TestClaudeCodeModelBuildAgentOptions:
         assert options.disallowed_tools == ["Bash"]
         assert options.permission_mode == "bypassPermissions"
         assert options.max_turns == 5
+
+    def test_build_agent_options_with_empty_allowed_tools(self) -> None:
+        """_build_agent_options should preserve empty list for allowed_tools."""
+        model = ClaudeCodeModel(allowed_tools=[])
+        options = model._build_agent_options()
+
+        assert options.allowed_tools == []
+        assert options.allowed_tools is not None
 
     def test_build_agent_options_with_override_values(self) -> None:
         """_build_agent_options should allow override values via parameters."""

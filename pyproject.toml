@@ -39,4 +39,4 @@ exclude = ["ai_working/"]
 # Temporary: Use forked branch until upstream fix is merged
 # Issue: https://github.com/drillan/claudecode-model/issues/60
 # PR: https://github.com/anthropics/claude-agent-sdk-python/pull/492
-claude-agent-sdk = { git = "https://github.com/drillan/claude-agent-sdk-python.git", branch = "fix/string-prompt-mcp-transport" }
+claude-agent-sdk = { git = "https://github.com/drillan/claude-agent-sdk-python.git", branch = "fix/combined-fixes" }

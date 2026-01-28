@@ -317,7 +317,7 @@ wheels = [
 [[package]]
 name = "claude-agent-sdk"
 version = "0.1.20"
-source = { git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fstring-prompt-mcp-transport#49ee621ec670cbc110a33b85539326612a2c9f8d" }
+source = { git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fcombined-fixes#c9eca62f4cefa6575300bb365f697495fd38445d" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
@@ -343,7 +343,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fstring-prompt-mcp-transport" },
+    { name = "claude-agent-sdk", git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fcombined-fixes" },
     { name = "dacite", specifier = ">=1.9.0" },
     { name = "pydantic-ai", specifier = ">=1.42.0" },
 ]
