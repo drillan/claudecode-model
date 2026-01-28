@@ -622,17 +622,17 @@ class ClaudeCodeModel(Model):
     def _try_unwrap_parameters_wrapper(
         self, result: ResultMessage
     ) -> dict[str, JsonValue] | None:
-        """Try to unwrap {"parameters": {...}} or {"parameter": {...}} format.
+        """Try to unwrap {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} format.
 
-        Some models wrap structured output in a parameters envelope. This method
-        detects and unwraps this format when structured_output is not already set.
-        Supports both plural ("parameters") and singular ("parameter") forms.
+        Some models wrap structured output in a parameters or output envelope.
+        This method detects and unwraps this format when structured_output is
+        not already set. Supports "parameters", "parameter", and "output" keys.
 
         Args:
             result: ResultMessage from Claude Agent SDK.
 
         Returns:
-            Unwrapped dict if parameters/parameter wrapper detected, None otherwise.
+            Unwrapped dict if wrapper detected, None otherwise.
         """
         # Only process if structured_output is not already set
         if result.structured_output is not None:
@@ -654,7 +654,7 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}} or {"parameter": {...}} format (single key)
+        # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} format (single key)
         if not isinstance(parsed, dict):
             return None
 
@@ -663,23 +663,25 @@ class ClaudeCodeModel(Model):
             wrapper_key = "parameters"
         elif keys == ["parameter"]:
             wrapper_key = "parameter"
+        elif keys == ["output"]:
+            wrapper_key = "output"
         else:
             return None
 
-        parameters_value = parsed[wrapper_key]
-        if not isinstance(parameters_value, dict):
+        wrapper_value = parsed[wrapper_key]
+        if not isinstance(wrapper_value, dict):
             return None
 
         # Log info about automatic unwrapping
         logger.info(
-            "Detected and unwrapped parameters wrapper in result. "
+            "Detected and unwrapped structured output wrapper in result. "
             "wrapper_key=%s, session_id=%s, num_turns=%s",
             wrapper_key,
             result.session_id,
             result.num_turns,
         )
 
-        return parameters_value
+        return wrapper_value
 
     def _try_recover_from_captured_tool_input(
         self,
@@ -689,7 +691,8 @@ class ClaudeCodeModel(Model):
 
         When a structured output recovery subtype occurs and result.result is empty,
         we can still recover by extracting the structured output from the ToolUseBlock
-        input captured from AssistantMessage during the query.
+        input captured from AssistantMessage during the query. Supports
+        "parameters", "parameter", and "output" wrapper keys.
 
         Args:
             captured_input: The captured StructuredOutput tool input dict.
@@ -708,16 +711,35 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}} or {"parameter": {...}} wrapper
+        # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} wrapper
         keys = list(captured_input.keys())
         if keys == ["parameters"]:
-            parameters_value = captured_input["parameters"]
-            if isinstance(parameters_value, dict):
-                return parameters_value
+            wrapper_value = captured_input["parameters"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'parameters' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
         elif keys == ["parameter"]:
-            parameters_value = captured_input["parameter"]
-            if isinstance(parameters_value, dict):
-                return parameters_value
+            wrapper_value = captured_input["parameter"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'parameter' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
+        elif keys == ["output"]:
+            wrapper_value = captured_input["output"]
+            if isinstance(wrapper_value, dict):
+                return wrapper_value
+            logger.debug(
+                "Wrapper key 'output' found but value is not a dict: type=%s",
+                type(wrapper_value).__name__,
+            )
+            return None
 
         # No wrapper - return captured input directly if it's a dict
         return captured_input
