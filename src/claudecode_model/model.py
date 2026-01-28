@@ -88,6 +88,7 @@ _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES: frozenset[str] = frozenset(
     {
         "error_max_structured_output_retries",
         "error_max_turns",
+        "error_during_execution",
     }
 )
 
