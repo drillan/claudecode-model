@@ -316,8 +316,8 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.1.20"
-source = { git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fcombined-fixes#c9eca62f4cefa6575300bb365f697495fd38445d" }
+version = "0.1.25"
+source = { git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fcombined-fixes#118912007b9527f0ee71be191d9f72e8b65e5ffd" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
