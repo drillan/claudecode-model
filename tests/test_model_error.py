@@ -302,7 +302,10 @@ class TestStructuredOutputError:
         ]
 
         # json_schema is required for recovery block to be entered
-        json_schema: dict[str, JsonValue] = {"type": "object", "properties": {"name": {"type": "string"}}}
+        json_schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
 
         # Simulate SDK returning error_max_structured_output_retries
         error_result = ResultMessage(
@@ -342,7 +345,10 @@ class TestStructuredOutputError:
         ]
 
         # json_schema is required for recovery block to be entered
-        json_schema: dict[str, JsonValue] = {"type": "object", "properties": {"name": {"type": "string"}}}
+        json_schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
 
         error_result = ResultMessage(
             subtype="error_max_structured_output_retries",
