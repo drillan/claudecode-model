@@ -12,7 +12,12 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
 
 from pydantic_ai.models import ModelRequestParameters
 
-from claudecode_model._sdk_compat import _safe_parse_message, safe_message_parsing
+from claudecode_model._sdk_compat import (
+    _UNKNOWN_TYPE_PREFIX,
+    _safe_parse_message,
+    safe_message_parsing,
+)
+from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.model import ClaudeCodeModel
 
 
@@ -34,12 +39,14 @@ class TestSafeParseMessage:
     def test_logs_warning_for_unknown_message_type(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """_safe_parse_message should log warning for unknown types."""
+        """_safe_parse_message should log warning with type and full data."""
         data: dict[str, object] = {"type": "rate_limit_event", "retry_after": 5}
         with caplog.at_level(logging.WARNING):
             _safe_parse_message(data)
         assert "Skipping unrecognized SDK message type" in caplog.text
         assert "rate_limit_event" in caplog.text
+        # M1: Verify full data is logged for debugging
+        assert "retry_after" in caplog.text
 
     def test_raises_for_missing_required_field(self) -> None:
         """_safe_parse_message should re-raise for missing required fields."""
@@ -66,6 +73,20 @@ class TestSafeParseMessage:
         }
         result = _safe_parse_message(data)
         assert isinstance(result, ResultMessage)
+
+    def test_unknown_type_prefix_matches_sdk_error_message(self) -> None:
+        """_UNKNOWN_TYPE_PREFIX should match the SDK's actual error message format.
+
+        This test validates that the SDK's message_parser.py still uses the
+        expected error format. If the SDK changes its wording, this test will
+        fail, alerting us that the prefix match needs updating.
+        When the prefix no longer matches, the code fails safe (re-raises).
+        """
+        from claude_agent_sdk._internal.message_parser import parse_message
+
+        with pytest.raises(MessageParseError) as exc_info:
+            parse_message({"type": "nonexistent_test_type"})
+        assert str(exc_info.value).startswith(_UNKNOWN_TYPE_PREFIX)
 
 
 class TestSafeMessageParsingContextManager:
@@ -261,3 +282,62 @@ class TestStreamMessagesWithUnknownMessage:
         assert len(received) == 2
         assert isinstance(received[0], AssistantMessage)
         assert isinstance(received[1], ResultMessage)
+
+    @pytest.mark.asyncio
+    async def test_stream_messages_filters_multiple_consecutive_none(self) -> None:
+        """stream_messages should skip multiple consecutive None messages."""
+        model = ClaudeCodeModel()
+
+        result_msg = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Done",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+
+        async def mock_query(
+            **kwargs: object,
+        ) -> AsyncIterator[Message | None]:
+            yield None  # rate_limit_event
+            yield None  # some_other_event
+            yield None  # yet_another_event
+            yield result_msg
+
+        received: list[Message] = []
+        messages: list[ModelRequest | ModelResponse] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+        params = ModelRequestParameters()
+        with patch("claudecode_model.model.query", mock_query):
+            async for msg in model.stream_messages(messages, None, params):
+                received.append(msg)
+
+        assert len(received) == 1
+        assert isinstance(received[0], ResultMessage)
+
+    @pytest.mark.asyncio
+    async def test_stream_messages_sdk_exception_becomes_cli_execution_error(
+        self,
+    ) -> None:
+        """stream_messages should wrap SDK exceptions in CLIExecutionError."""
+        model = ClaudeCodeModel()
+
+        async def mock_query_raises(**kwargs: object) -> AsyncIterator[Message]:
+            raise RuntimeError("SDK transport error")
+            yield  # pragma: no cover
+
+        messages: list[ModelRequest | ModelResponse] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+        params = ModelRequestParameters()
+        with patch("claudecode_model.model.query", mock_query_raises):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                async for _ in model.stream_messages(messages, None, params):
+                    pass  # pragma: no cover
+
+        assert "SDK query failed" in str(exc_info.value)
+        assert "SDK transport error" in str(exc_info.value)
