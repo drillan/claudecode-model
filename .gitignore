@@ -221,3 +221,8 @@ __marimo__/
 # working directories
 /work/
 /ai_working/
+# hachimoku
+/.hachimoku/
+
+# issue-workflow
+/.issue-workflow/
