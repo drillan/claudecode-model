@@ -1,5 +1,6 @@
 """Tests for SDK compatibility layer handling unknown message types."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from unittest.mock import patch
@@ -15,7 +16,6 @@ from pydantic_ai.models import ModelRequestParameters
 from claudecode_model._sdk_compat import (
     _UNKNOWN_TYPE_PREFIX,
     _safe_parse_message,
-    safe_message_parsing,
 )
 from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.model import ClaudeCodeModel
@@ -89,46 +89,100 @@ class TestSafeParseMessage:
         assert str(exc_info.value).startswith(_UNKNOWN_TYPE_PREFIX)
 
 
-class TestSafeMessageParsingContextManager:
-    """Tests for safe_message_parsing context manager."""
+class TestModuleLevelPatch:
+    """Tests for module-level parse_message patch."""
 
-    def test_patches_parse_message_in_client_module(self) -> None:
-        """safe_message_parsing should patch parse_message in the SDK client module."""
+    def test_parse_message_is_patched_on_import(self) -> None:
+        """parse_message in SDK client module should be patched after _sdk_compat import."""
         from claude_agent_sdk._internal import client as sdk_client
+        from claude_agent_sdk._internal.message_parser import (
+            parse_message as original_parse_message,
+        )
 
-        original = sdk_client.parse_message
-        with safe_message_parsing():
-            assert sdk_client.parse_message is not original
-        # Restored after exit
-        assert sdk_client.parse_message is original
+        # After importing _sdk_compat, the client module's parse_message
+        # should be _safe_parse_message, not the original
+        assert sdk_client.parse_message is not original_parse_message
+        assert sdk_client.parse_message.__qualname__ == "_safe_parse_message"
 
     def test_patched_parse_message_returns_none_for_unknown(self) -> None:
-        """Patched parse_message should return None for unknown types."""
+        """Patched parse_message in client module should return None for unknown types."""
         from claude_agent_sdk._internal import client as sdk_client
 
-        with safe_message_parsing():
-            result = sdk_client.parse_message(
-                {"type": "rate_limit_event", "retry_after": 5}
-            )
-            assert result is None
+        result = sdk_client.parse_message(
+            {"type": "rate_limit_event", "retry_after": 5}
+        )
+        assert result is None
 
     def test_patched_parse_message_still_parses_known_types(self) -> None:
         """Patched parse_message should still parse known types correctly."""
         from claude_agent_sdk._internal import client as sdk_client
 
-        with safe_message_parsing():
-            result = sdk_client.parse_message(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "duration_ms": 1000,
-                    "duration_api_ms": 800,
-                    "is_error": False,
-                    "num_turns": 1,
-                    "session_id": "test",
-                }
-            )
-            assert isinstance(result, ResultMessage)
+        result = sdk_client.parse_message(
+            {
+                "type": "result",
+                "subtype": "success",
+                "duration_ms": 1000,
+                "duration_api_ms": 800,
+                "is_error": False,
+                "num_turns": 1,
+                "session_id": "test",
+            }
+        )
+        assert isinstance(result, ResultMessage)
+
+
+class TestConcurrentSafety:
+    """Tests for concurrent safety of module-level patch."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_coroutines_do_not_race(self) -> None:
+        """Multiple concurrent coroutines should all see the patched parse_message.
+
+        This is the core regression test for issue #104. With the old
+        mock.patch context manager approach, Coroutine A exiting the context
+        would restore the original parse_message while Coroutine B was still
+        running, causing MessageParseError on unknown message types.
+        """
+        from claude_agent_sdk._internal import client as sdk_client
+
+        errors: list[Exception] = []
+
+        async def coroutine_that_parses_unknown() -> None:
+            """Simulate a coroutine that encounters an unknown message type."""
+            # Small delay to ensure overlap with other coroutines
+            await asyncio.sleep(0.01)
+            try:
+                result = sdk_client.parse_message(
+                    {"type": "rate_limit_event", "retry_after": 5}
+                )
+                assert result is None
+            except MessageParseError as e:
+                errors.append(e)
+
+        async with asyncio.TaskGroup() as tg:
+            for _ in range(10):
+                tg.create_task(coroutine_that_parses_unknown())
+
+        assert errors == [], f"Race condition detected: {errors}"
+
+    @pytest.mark.asyncio
+    async def test_patch_persists_after_concurrent_completion(self) -> None:
+        """parse_message should remain patched after all concurrent coroutines complete."""
+        from claude_agent_sdk._internal import client as sdk_client
+
+        async def noop_coroutine() -> None:
+            await asyncio.sleep(0.001)
+
+        async with asyncio.TaskGroup() as tg:
+            for _ in range(5):
+                tg.create_task(noop_coroutine())
+
+        # After all coroutines complete, patch should still be active
+        assert sdk_client.parse_message.__qualname__ == "_safe_parse_message"
+        result = sdk_client.parse_message(
+            {"type": "rate_limit_event", "retry_after": 5}
+        )
+        assert result is None
 
 
 class TestExecuteSDKQueryWithUnknownMessage:

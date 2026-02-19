@@ -27,7 +27,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 from pydantic_ai.profiles import ModelProfile
 
-from claudecode_model._sdk_compat import safe_message_parsing
+import claudecode_model._sdk_compat as _sdk_compat  # noqa: F401  # imported for module-level patch side effect
 from claudecode_model.cli import (
     DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA,
     DEFAULT_MODEL,
@@ -516,27 +516,26 @@ class ClaudeCodeModel(Model):
         async def run_query() -> _QueryResult:
             nonlocal result_message, captured_structured_output_input, query_generator
             try:
-                with safe_message_parsing():
-                    query_generator = query(prompt=prompt, options=options)
-                    async for message in query_generator:
-                        if message is None:
-                            continue
-                        if isinstance(message, ResultMessage):
-                            result_message = message
-                        else:
-                            # Capture StructuredOutput tool input from AssistantMessage.
-                            # Note: If multiple StructuredOutput blocks exist, only the
-                            # last one is retained. This is intentional as we only need
-                            # the final output for recovery purposes.
-                            if isinstance(message, AssistantMessage):
-                                for block in message.content:
-                                    if (
-                                        isinstance(block, ToolUseBlock)
-                                        and block.name == _STRUCTURED_OUTPUT_TOOL_NAME
-                                    ):
-                                        captured_structured_output_input = block.input
-                            # Invoke callback for intermediate messages
-                            await self._invoke_callback(message)
+                query_generator = query(prompt=prompt, options=options)
+                async for message in query_generator:
+                    if message is None:
+                        continue
+                    if isinstance(message, ResultMessage):
+                        result_message = message
+                    else:
+                        # Capture StructuredOutput tool input from AssistantMessage.
+                        # Note: If multiple StructuredOutput blocks exist, only the
+                        # last one is retained. This is intentional as we only need
+                        # the final output for recovery purposes.
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if (
+                                    isinstance(block, ToolUseBlock)
+                                    and block.name == _STRUCTURED_OUTPUT_TOOL_NAME
+                                ):
+                                    captured_structured_output_input = block.input
+                        # Invoke callback for intermediate messages
+                        await self._invoke_callback(message)
             except Exception as e:
                 raise CLIExecutionError(
                     f"SDK query failed: {e}",
@@ -1168,12 +1167,11 @@ class ClaudeCodeModel(Model):
         query_generator: AsyncIterator[Message] | None = None
         with anyio.move_on_after(settings.timeout) as cancel_scope:
             try:
-                with safe_message_parsing():
-                    query_generator = query(prompt=user_prompt, options=options)
-                    async for message in query_generator:
-                        if message is None:
-                            continue
-                        yield message
+                query_generator = query(prompt=user_prompt, options=options)
+                async for message in query_generator:
+                    if message is None:
+                        continue
+                    yield message
             except Exception as e:
                 raise CLIExecutionError(
                     f"SDK query failed: {e}",
