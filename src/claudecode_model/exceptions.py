@@ -53,6 +53,15 @@ class CLIExecutionError(ClaudeCodeError):
         self.recoverable = recoverable
 
 
+class CLIInterruptedError(ClaudeCodeError):
+    """Raised when execution is interrupted by the user (e.g., Ctrl-C).
+
+    This exception is raised instead of raw KeyboardInterrupt to provide
+    structured error handling. The subprocess is gracefully terminated
+    (SIGTERM → wait → SIGKILL) before this exception is raised.
+    """
+
+
 class CLIResponseParseError(ClaudeCodeError):
     """Raised when CLI JSON output cannot be parsed."""
 

@@ -47,6 +47,7 @@ from claudecode_model.deps_support import (  # noqa: E402
 )
 from claudecode_model.exceptions import (  # noqa: E402
     CLIExecutionError,
+    CLIInterruptedError,
     CLINotFoundError,
     CLIResponseParseError,
     ClaudeCodeError,
@@ -99,6 +100,7 @@ __all__ = [
     "ClaudeCodeError",
     "CLINotFoundError",
     "CLIExecutionError",
+    "CLIInterruptedError",
     "CLIResponseParseError",
     "StructuredOutputError",
     "UnsupportedDepsTypeError",
