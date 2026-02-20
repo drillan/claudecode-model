@@ -146,6 +146,7 @@ class ClaudeCodeModel(Model):
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
+        self._current_server_name: str = MCP_SERVER_NAME
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -1021,8 +1022,9 @@ class ClaudeCodeModel(Model):
 
         if matched_tools:
             # Update MCP server with matched tools only
-            self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
-                name=MCP_SERVER_NAME,
+            server_name = self._current_server_name
+            self._mcp_servers[server_name] = create_mcp_server_from_tools(
+                name=server_name,
                 toolsets=matched_tools,
             )
 
@@ -1193,7 +1195,10 @@ class ClaudeCodeModel(Model):
             )
 
     def set_agent_toolsets(
-        self, toolsets: Sequence[PydanticAITool] | AgentToolset | None
+        self,
+        toolsets: Sequence[PydanticAITool] | AgentToolset | None,
+        *,
+        server_name: str = MCP_SERVER_NAME,
     ) -> None:
         """Register pydantic-ai Agent toolsets for MCP server exposure.
 
@@ -1202,17 +1207,21 @@ class ClaudeCodeModel(Model):
         Args:
             toolsets: Sequence of pydantic-ai tool objects, an AgentToolset
                 (e.g., agent._function_toolset), or None.
+            server_name: MCP server name used as prefix in
+                ``mcp__<server_name>__<tool_name>``.
+                Defaults to ``MCP_SERVER_NAME`` (``"pydantic_tools"``).
 
         Note:
             Calling this method multiple times will overwrite the previous toolsets.
             A warning is logged when overwriting existing toolsets.
         """
-        if MCP_SERVER_NAME in self._mcp_servers:
+        if server_name in self._mcp_servers:
             logger.warning(
                 "Overwriting existing MCP server '%s'. "
                 "Previous toolsets will be replaced.",
-                MCP_SERVER_NAME,
+                server_name,
             )
+        self._current_server_name = server_name
         self._agent_toolsets = toolsets
 
         # Build tools cache for efficient lookup in _find_tools_by_names
@@ -1229,15 +1238,16 @@ class ClaudeCodeModel(Model):
         else:
             tools_for_mcp = None
 
-        self._mcp_servers[MCP_SERVER_NAME] = create_mcp_server_from_tools(
-            name=MCP_SERVER_NAME,
+        self._mcp_servers[server_name] = create_mcp_server_from_tools(
+            name=server_name,
             toolsets=tools_for_mcp,
         )
 
         registered_names = list(self._tools_cache.keys())
         logger.debug(
-            "set_agent_toolsets: registered %d tools, tool_names=%s",
+            "set_agent_toolsets: registered %d tools, server_name=%s, tool_names=%s",
             len(registered_names),
+            server_name,
             registered_names,
         )
 
