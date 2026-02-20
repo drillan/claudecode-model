@@ -190,6 +190,7 @@ print(ctx.deps["api_key"])  # "secret"
 | `disallowed_tools` | `list[str] \| None` | `None` | List of disallowed CLI tools |
 | `permission_mode` | `str \| None` | `None` | Permission mode (e.g., "bypassPermissions") |
 | `max_turns` | `int \| None` | `None` | Maximum conversation turns |
+| `interrupt_handler` | `Callable[[], bool] \| None` | `None` | Callback for Ctrl-C confirmation |
 
 ### Model Settings
 
@@ -232,6 +233,49 @@ print(f"Turns: {result.cli_response.num_turns}")
 print(f"Input tokens: {result.cli_response.usage.input_tokens}")
 print(f"Output tokens: {result.cli_response.usage.output_tokens}")
 ```
+
+## Graceful Exit and Interrupt Handling
+
+claudecode-model handles `KeyboardInterrupt` (Ctrl-C) gracefully, ensuring subprocesses are properly terminated and resources are cleaned up.
+
+### Default Behavior
+
+When a `KeyboardInterrupt` occurs during execution:
+
+1. **SIGTERM** is sent to the subprocess for graceful shutdown
+2. Waits up to 5 seconds for the process to exit
+3. If still running, **SIGKILL** is sent to force termination
+4. A `CLIInterruptedError` is raised with any partial results
+
+```python
+from claudecode_model import ClaudeCodeModel, CLIInterruptedError
+
+model = ClaudeCodeModel()
+agent = Agent(model)
+
+try:
+    result = agent.run_sync("Analyze this large codebase")
+except CLIInterruptedError as e:
+    print(f"Interrupted: {e}")
+```
+
+### Custom Interrupt Handler
+
+Provide a callback via `interrupt_handler` to add confirmation prompts or custom cleanup logic before the process is terminated:
+
+```python
+def confirm_exit() -> bool:
+    """Return True to proceed with exit, False to continue execution."""
+    response = input("\nAre you sure you want to exit? (y/n): ")
+    return response.lower() == "y"
+
+model = ClaudeCodeModel(interrupt_handler=confirm_exit)
+```
+
+The `interrupt_handler` callback:
+- Takes no arguments
+- Returns `bool`: `True` to proceed with termination, `False` to continue
+- Is called on the first Ctrl-C; a second Ctrl-C always forces immediate termination
 
 ## Limitations and Notes
 
@@ -323,6 +367,7 @@ print(result.output)
 - `ClaudeCodeError`: Base exception
 - `CLINotFoundError`: Claude CLI executable not found
 - `CLIExecutionError`: SDK execution failed
+- `CLIInterruptedError`: User interrupted execution (Ctrl-C)
 - `CLIResponseParseError`: Response parsing failed
 - `UnsupportedDepsTypeError`: Non-serializable dependency type
 - `TypeHintResolutionError`: Type hint resolution failed

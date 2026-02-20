@@ -6,9 +6,11 @@ import asyncio
 import json
 import logging
 import shutil
+from collections.abc import Callable
 
 from claudecode_model.exceptions import (
     CLIExecutionError,
+    CLIInterruptedError,
     CLINotFoundError,
     CLIResponseParseError,
 )
@@ -27,6 +29,7 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_PROMPT_LENGTH = 1_000_000  # 1MB limit
 DEFAULT_MAX_TURNS_WITH_JSON_SCHEMA = 3
 TIMEOUT_EXIT_CODE = -9  # Exit code for timeout signal (SIGKILL)
+GRACEFUL_TERMINATION_TIMEOUT_SECONDS = 5.0  # Wait time for SIGTERM before SIGKILL
 
 
 class ClaudeCodeCLI:
@@ -46,6 +49,7 @@ class ClaudeCodeCLI:
         append_system_prompt: str | None = None,
         max_turns: int | None = None,
         json_schema: dict[str, JsonValue] | None = None,
+        interrupt_handler: Callable[[], bool] | None = None,
     ) -> None:
         if max_budget_usd is not None and max_budget_usd < 0:
             raise ValueError("max_budget_usd must be non-negative")
@@ -66,6 +70,7 @@ class ClaudeCodeCLI:
         self.append_system_prompt = append_system_prompt
         self.max_turns = max_turns
         self.json_schema = json_schema
+        self.interrupt_handler = interrupt_handler
 
         self._cli_path: str | None = None
 
@@ -156,6 +161,33 @@ class ClaudeCodeCLI:
 
         return cmd
 
+    async def _terminate_process_gracefully(
+        self, process: asyncio.subprocess.Process
+    ) -> None:
+        """Terminate subprocess gracefully: SIGTERM → wait → SIGKILL.
+
+        Sends SIGTERM first to allow the process to clean up, then waits
+        up to GRACEFUL_TERMINATION_TIMEOUT_SECONDS. If the process is still
+        running after that, sends SIGKILL.
+
+        Args:
+            process: The subprocess to terminate.
+        """
+        process.terminate()
+        try:
+            await asyncio.wait_for(
+                process.wait(), timeout=GRACEFUL_TERMINATION_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Process did not exit after SIGTERM within %s seconds, "
+                "sending SIGKILL. pid=%s",
+                GRACEFUL_TERMINATION_TIMEOUT_SECONDS,
+                process.pid,
+            )
+            process.kill()
+            await process.wait()
+
     async def execute(self, prompt: str) -> CLIResponse:
         """Execute the CLI with the given prompt and return the response.
 
@@ -168,6 +200,7 @@ class ClaudeCodeCLI:
         Raises:
             CLINotFoundError: If the claude CLI is not found.
             CLIExecutionError: If CLI execution fails or returns an error.
+            CLIInterruptedError: If execution is interrupted by the user.
             CLIResponseParseError: If the CLI output cannot be parsed.
             ValueError: If the prompt is invalid.
         """
@@ -199,6 +232,26 @@ class ClaudeCodeCLI:
                 error_type="timeout",
                 recoverable=True,
             ) from e
+        except KeyboardInterrupt:
+            if self.interrupt_handler is not None:
+                should_exit = self.interrupt_handler()
+                if not should_exit:
+                    # User chose to continue; retry communicate()
+                    if process is not None:
+                        stdout, stderr = await process.communicate()
+                        # Fall through to normal processing below
+                    else:
+                        raise CLIInterruptedError(
+                            "Execution interrupted before process was created"
+                        )
+                else:
+                    if process is not None:
+                        await self._terminate_process_gracefully(process)
+                    raise CLIInterruptedError("Execution interrupted by user")
+            else:
+                if process is not None:
+                    await self._terminate_process_gracefully(process)
+                raise CLIInterruptedError("Execution interrupted by user")
         except asyncio.CancelledError:
             if process is not None:
                 process.kill()

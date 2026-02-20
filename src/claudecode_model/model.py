@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -113,6 +113,7 @@ class ClaudeCodeModel(Model):
         max_turns: int | None = None,
         message_callback: MessageCallbackType | None = None,
         continue_conversation: bool = False,
+        interrupt_handler: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize ClaudeCodeModel.
 
@@ -128,6 +129,9 @@ class ClaudeCodeModel(Model):
             continue_conversation: Continue from the last conversation session.
                 Can be overridden per-request via model_settings.
                 Cannot be used together with resume (set via model_settings).
+            interrupt_handler: Callback invoked on Ctrl-C (KeyboardInterrupt).
+                Returns True to proceed with termination, False to continue.
+                If None, interrupts immediately terminate execution.
         """
         self._model_name = model_name
         self._working_directory = working_directory
@@ -138,6 +142,7 @@ class ClaudeCodeModel(Model):
         self._max_turns = max_turns
         self._message_callback = message_callback
         self._continue_conversation = continue_conversation
+        self._interrupt_handler = interrupt_handler
         self._mcp_servers: dict[str, McpSdkServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
@@ -146,7 +151,7 @@ class ClaudeCodeModel(Model):
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
             "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
             "permission_mode=%s, max_turns=%s, has_message_callback=%s, "
-            "continue_conversation=%s",
+            "continue_conversation=%s, has_interrupt_handler=%s",
             self._model_name,
             self._working_directory,
             self._timeout,
@@ -156,6 +161,7 @@ class ClaudeCodeModel(Model):
             self._max_turns,
             self._message_callback is not None,
             self._continue_conversation,
+            self._interrupt_handler is not None,
         )
 
     @property
