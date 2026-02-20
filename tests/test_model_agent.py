@@ -338,3 +338,156 @@ class TestBuildAgentOptionsMcpServers:
         assert captured_options[0].mcp_servers is not None
         assert isinstance(captured_options[0].mcp_servers, dict)
         assert "pydantic_tools" in captured_options[0].mcp_servers
+
+
+class TestSetAgentToolsetsServerName:
+    """Tests for set_agent_toolsets with custom server_name parameter."""
+
+    def test_custom_server_name_registers_with_custom_key(self) -> None:
+        """set_agent_toolsets with custom server_name should use that key in _mcp_servers."""
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "delegate"
+        mock_tool.description = "Delegate task"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool], server_name="team")
+
+        assert "team" in model._mcp_servers
+        assert "pydantic_tools" not in model._mcp_servers
+
+    def test_default_server_name_uses_pydantic_tools(self) -> None:
+        """set_agent_toolsets without server_name should use 'pydantic_tools'."""
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "search"
+        mock_tool.description = "Search"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool])
+
+        assert "pydantic_tools" in model._mcp_servers
+
+    def test_process_function_tools_uses_custom_server_name(self) -> None:
+        """_process_function_tools should update MCP server with the custom server_name."""
+        from pydantic_ai.tools import ToolDefinition
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "analyze"
+        mock_tool.description = "Analyze data"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool], server_name="custom_server")
+
+        # Simulate function_tools from pydantic-ai
+        tool_def = ToolDefinition(
+            name="analyze",
+            description="Analyze data",
+            parameters_json_schema={"type": "object", "properties": {}},
+        )
+        model._process_function_tools([tool_def])
+
+        assert "custom_server" in model._mcp_servers
+        assert "pydantic_tools" not in model._mcp_servers
+
+    def test_overwrite_warning_uses_custom_server_name(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Overwrite warning should reference the custom server_name."""
+        model = ClaudeCodeModel()
+
+        # First call with custom server_name
+        model.set_agent_toolsets([], server_name="my_server")
+
+        # Second call with same server_name - should log warning
+        with caplog.at_level(logging.WARNING):
+            model.set_agent_toolsets(None, server_name="my_server")
+
+        assert "Overwriting" in caplog.text
+        assert "my_server" in caplog.text
+
+    def test_build_agent_options_passes_custom_server_name(self) -> None:
+        """_build_agent_options should include custom server_name in mcp_servers."""
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "delegate"
+        mock_tool.description = "Delegate"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool], server_name="team")
+        options = model._build_agent_options()
+
+        assert options.mcp_servers is not None
+        assert isinstance(options.mcp_servers, dict)
+        assert "team" in options.mcp_servers
+        assert "pydantic_tools" not in options.mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_request_passes_custom_server_name_to_sdk(self) -> None:
+        """request should pass custom server_name through to SDK options."""
+
+        async def dummy_func(**kwargs: object) -> str:
+            return "result"
+
+        model = ClaudeCodeModel()
+        mock_tool = MagicMock()
+        mock_tool.name = "weather"
+        mock_tool.description = "Get weather"
+        mock_tool.parameters_json_schema = {"type": "object", "properties": {}}
+        mock_tool.function = dummy_func
+
+        model.set_agent_toolsets([mock_tool], server_name="weather_api")
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        mock_result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+        )
+
+        captured_options: list[ClaudeAgentOptions] = []
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            captured_options.append(options)
+            yield mock_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        assert len(captured_options) == 1
+        assert isinstance(captured_options[0].mcp_servers, dict)
+        assert "weather_api" in captured_options[0].mcp_servers
+        assert "pydantic_tools" not in captured_options[0].mcp_servers

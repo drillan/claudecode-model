@@ -347,6 +347,20 @@ print(result.output)
 - `CLIResponse`: Response data with metadata
 - `CLIUsage`: Token usage information
 
+### Agent Toolsets
+
+- `ClaudeCodeModel.set_agent_toolsets(toolsets, *, server_name="pydantic_tools")`: Register pydantic-ai tools as MCP server
+  - `server_name`: Customize the MCP server name (appears as `mcp__<server_name>__<tool_name>` in Claude Code CLI)
+
+```python
+model = ClaudeCodeModel()
+# Default: tools appear as mcp__pydantic_tools__<tool_name>
+model.set_agent_toolsets(tools)
+
+# Custom: tools appear as mcp__team__<tool_name>
+model.set_agent_toolsets(tools, server_name="team")
+```
+
 ### Tool Conversion
 
 - `convert_tool(tool)`: Convert pydantic-ai Tool to SdkMcpTool
