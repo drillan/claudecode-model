@@ -88,12 +88,12 @@
 ### Functional Requirements
 
 - **FR-001**: システムは SDK の `ResultMessage` を `CLIResponse` に変換しなければならない。`result`, `subtype`, `is_error`, `duration_ms`, `duration_api_ms`, `num_turns`, `session_id`, `total_cost_usd`, `usage`, `structured_output` の全フィールドを保全する
-- **FR-002**: システムは SDK の usage データ（`dict[str, JsonValue] | None`）を型安全な `CLIUsage` モデルに変換しなければならない。`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `server_tool_use`, `service_tier`, `cache_creation` を含む
+- **FR-002**: システムは SDK の usage データを型安全な `CLIUsage` モデルに変換しなければならない。基本トークン数（入力・出力・キャッシュ作成・キャッシュ読取）、サーバーツール使用量、サービスティア、キャッシュ作成情報を含む
 - **FR-003**: システムは `AssistantMessage` の `content` ブロック列から `TextBlock` のテキストのみを抽出しなければならない。`ThinkingBlock` と `ToolUseBlock` は無視する
 - **FR-004**: システムは SDK の `AssistantMessage` 列と `ResultMessage` の両方を含むメッセージ列を `CLIResponse` に変換する統合関数を提供しなければならない
 - **FR-005**: システムは SDK の `parse_message` が未知のメッセージ型で `MessageParseError` を送出した場合、その例外をキャッチし `None` を返し警告ログを出力しなければならない
 - **FR-006**: システムは未知メッセージ型以外の `MessageParseError`（フィールド不足、データ不正等）をそのまま再送出しなければならない
-- **FR-007**: システムは SDK 互換パッチをモジュールインポート時に一度だけ適用しなければならない。per-call のコンテキストマネージャーではなく、モジュールレベルのパッチとする（concurrent 実行時のレースコンディション回避）
+- **FR-007**: システムは SDK 互換パッチをアプリケーション起動時に一度だけ適用しなければならない。並行実行時にもパッチが一貫して適用されることを保証する
 - **FR-008**: システムは usage dict のフィールドが予期しない型の場合、警告ログを出力し安全な型変換を行わなければならない（`_safe_int` 関数）
 - **FR-009**: システムはレスポンス変換関数（`convert_sdk_messages_to_cli_response`, `convert_usage_dict_to_cli_usage`, `extract_text_from_assistant_message`）をパブリック API として公開しなければならない
 
@@ -102,8 +102,6 @@
 - **`convert_sdk_messages_to_cli_response()`**: SDK メッセージ列を `CLIResponse` に変換するエントリポイント関数。`AssistantMessage` からのテキスト抽出と `ResultMessage` からのメタデータ抽出を統合する
 - **`convert_usage_dict_to_cli_usage()`**: SDK の usage dict を `CLIUsage` モデルに変換する関数。ネストされた `ServerToolUse` と `CacheCreation` の変換を含む
 - **`extract_text_from_assistant_message()`**: `AssistantMessage` から `TextBlock` テキストのみを抽出する関数
-- **`_safe_int()`**: `JsonValue` を安全に `int` に変換する内部ヘルパー関数。予期しない型に対して警告ログを出力する
-- **`_safe_parse_message()`**: SDK の `parse_message` をラップし、未知メッセージ型をスキップする関数。モジュールインポート時に SDK のクライアントモジュールにパッチとして適用される
 
 ## Success Criteria *(mandatory)*
 
@@ -113,8 +111,8 @@
 - **SC-002**: usage dict の全フィールド（基本トークン、`server_tool_use`、`cache_creation`、`service_tier`）が `CLIUsage` に保全される
 - **SC-003**: 未知の SDK メッセージ型がクエリ全体を失敗させず、後続のメッセージが正常に処理される
 - **SC-004**: 未知メッセージ型以外のパースエラーは例外としてそのまま伝播する
-- **SC-005**: `_safe_int()` が予期しない型入力に対して警告ログを出力し、安全なデフォルト値を返す
-- **SC-006**: レスポンス変換関数がパブリック API として `__init__.py` からエクスポートされている
+- **SC-005**: 予期しない型入力に対して安全な型変換が行われ、警告ログが出力される
+- **SC-006**: レスポンス変換関数がパブリック API として公開されている
 - **SC-007**: 全てのパブリック関数・メソッドに型注釈が付与されている
 
 ## Scope
