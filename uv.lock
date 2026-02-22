@@ -364,6 +364,7 @@ source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "dacite" },
+    { name = "mcp" },
     { name = "pydantic-ai" },
 ]
 
@@ -379,6 +380,7 @@ dev = [
 requires-dist = [
     { name = "claude-agent-sdk", git = "https://github.com/drillan/claude-agent-sdk-python.git?branch=fix%2Fcombined-fixes" },
     { name = "dacite", specifier = ">=1.9.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
     { name = "pydantic-ai", specifier = ">=1.42.0" },
 ]
 

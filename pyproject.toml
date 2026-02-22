@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-ai>=1.42.0",
     "claude-agent-sdk>=0.1.20",
     "dacite>=1.9.0",
+    "mcp>=1.0.0",
 ]
 
 [project.scripts]
