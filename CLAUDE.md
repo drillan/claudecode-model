@@ -50,7 +50,7 @@
 - `uv run` または `.venv/bin/python` を使用
 
 ## Active Technologies
-- Python 3.13+, pydantic-ai, claude-agent-sdk
+- Python 3.13+, pydantic-ai, claude-agent-sdk, mcp
 - uv (パッケージ管理)
 
 ## Recent Changes
