@@ -92,15 +92,23 @@ class IPCServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a single client connection.
+        """Handle a persistent client connection.
 
-        Reads one IPC request, dispatches it, and sends the response.
-        Each connection handles exactly one request-response cycle.
+        Reads IPC requests in a loop, dispatching each to the appropriate
+        handler and sending the response back.  The loop terminates when
+        the client disconnects (EOF / connection reset).
         """
         try:
-            raw_request = await receive_message(reader)
-            response = await self._dispatch(raw_request)
-            await send_message(writer, response)
+            while True:
+                try:
+                    raw_request = await receive_message(reader)
+                except (asyncio.IncompleteReadError, ConnectionError):
+                    break  # Client disconnected
+                try:
+                    response = await self._dispatch(raw_request)
+                    await send_message(writer, response)
+                except (ConnectionError, OSError):
+                    break  # Connection lost during response
         except Exception:
             logger.error("Error handling IPC connection", exc_info=True)
         finally:
