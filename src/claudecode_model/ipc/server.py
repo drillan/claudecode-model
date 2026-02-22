@@ -220,13 +220,16 @@ class IPCSession:
         return self._schema_path
 
     async def start(self) -> None:
-        """Start the IPC session: write schema file and start server.
+        """Start the IPC session: clean stale sockets, write schema, start server.
 
-        Creates the schema file with owner-only permissions and starts
-        the IPC server bound to the socket path.
+        Scans the temp directory for stale socket files from previous sessions
+        and removes them before starting this session's server.
         """
         if self._started:
             return
+
+        # Clean up stale socket files from previous crashes (FR-010)
+        self._cleanup_stale_sockets()
 
         # Write schema file with restricted permissions
         self._write_schema_file()
@@ -242,6 +245,29 @@ class IPCSession:
             self._schema_path,
             len(self._tool_schemas),
         )
+
+    def _cleanup_stale_sockets(self) -> None:
+        """Remove stale socket files from previous sessions.
+
+        Scans the temp directory for files matching the ``claudecode_ipc_*.sock``
+        pattern and removes any that do not belong to this session.
+        """
+        tmp_dir = Path(tempfile.gettempdir())
+        pattern = f"{SOCKET_FILE_PREFIX}*{SOCKET_FILE_SUFFIX}"
+        own_socket = Path(self._socket_path).name
+
+        for stale_path in tmp_dir.glob(pattern):
+            if stale_path.name == own_socket:
+                continue
+            try:
+                stale_path.unlink()
+                logger.info("Removed stale socket file: %s", stale_path)
+            except OSError:
+                logger.warning(
+                    "Failed to remove stale socket file: %s",
+                    stale_path,
+                    exc_info=True,
+                )
 
     async def stop(self) -> None:
         """Stop the IPC session: stop server and clean up files.
