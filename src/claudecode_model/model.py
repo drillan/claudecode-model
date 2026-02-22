@@ -1027,6 +1027,22 @@ class ClaudeCodeModel(Model):
                 toolsets=matched_tools,
             )
 
+    async def _start_ipc_server(self) -> None:
+        """Start the IPC server if an IPC session is configured.
+
+        No-op when ``_ipc_session`` is ``None`` (SDK mode or no toolsets).
+        """
+        if self._ipc_session is not None:
+            await self._ipc_session.start()
+
+    async def _stop_ipc_server(self) -> None:
+        """Stop the IPC server if an IPC session is configured.
+
+        No-op when ``_ipc_session`` is ``None``.
+        """
+        if self._ipc_session is not None:
+            await self._ipc_session.stop()
+
     async def request(
         self,
         messages: list[ModelMessage],
@@ -1051,10 +1067,15 @@ class ClaudeCodeModel(Model):
         self._process_function_tools(model_request_parameters.function_tools)
 
         json_schema = self._extract_json_schema(model_request_parameters)
-        cli_response = await self._execute_request(
-            messages, model_settings, json_schema=json_schema
-        )
-        return cli_response.to_model_response(model_name=self._model_name)
+
+        await self._start_ipc_server()
+        try:
+            cli_response = await self._execute_request(
+                messages, model_settings, json_schema=json_schema
+            )
+            return cli_response.to_model_response(model_name=self._model_name)
+        finally:
+            await self._stop_ipc_server()
 
     async def request_with_metadata(
         self,
@@ -1097,13 +1118,18 @@ class ClaudeCodeModel(Model):
         self._process_function_tools(model_request_parameters.function_tools)
 
         json_schema = self._extract_json_schema(model_request_parameters)
-        cli_response = await self._execute_request(
-            messages, model_settings, json_schema=json_schema
-        )
-        return RequestWithMetadataResult(
-            response=cli_response.to_model_response(model_name=self._model_name),
-            cli_response=cli_response,
-        )
+
+        await self._start_ipc_server()
+        try:
+            cli_response = await self._execute_request(
+                messages, model_settings, json_schema=json_schema
+            )
+            return RequestWithMetadataResult(
+                response=cli_response.to_model_response(model_name=self._model_name),
+                cli_response=cli_response,
+            )
+        finally:
+            await self._stop_ipc_server()
 
     async def stream_messages(
         self,
@@ -1170,28 +1196,33 @@ class ClaudeCodeModel(Model):
             resume=settings.resume,
         )
 
-        # Stream messages with timeout handling and SDK exception conversion
-        query_generator: AsyncIterator[Message] | None = None
-        with anyio.move_on_after(settings.timeout) as cancel_scope:
-            try:
-                query_generator = query(prompt=user_prompt, options=options)
-                async for message in query_generator:
-                    if message is None:
-                        continue
-                    yield message
-            except Exception as e:
-                raise CLIExecutionError(
-                    f"SDK query failed: {e}",
-                    exit_code=None,
-                    stderr=str(e),
-                    error_type="unknown",
-                    recoverable=False,
-                ) from e
+        # Start IPC server before streaming, stop in finally block
+        await self._start_ipc_server()
+        try:
+            # Stream messages with timeout handling and SDK exception conversion
+            query_generator: AsyncIterator[Message] | None = None
+            with anyio.move_on_after(settings.timeout) as cancel_scope:
+                try:
+                    query_generator = query(prompt=user_prompt, options=options)
+                    async for message in query_generator:
+                        if message is None:
+                            continue
+                        yield message
+                except Exception as e:
+                    raise CLIExecutionError(
+                        f"SDK query failed: {e}",
+                        exit_code=None,
+                        stderr=str(e),
+                        error_type="unknown",
+                        recoverable=False,
+                    ) from e
 
-        if cancel_scope.cancelled_caught:
-            await self._cleanup_query_generator_on_timeout(
-                query_generator, settings.timeout
-            )
+            if cancel_scope.cancelled_caught:
+                await self._cleanup_query_generator_on_timeout(
+                    query_generator, settings.timeout
+                )
+        finally:
+            await self._stop_ipc_server()
 
     def set_agent_toolsets(
         self,
