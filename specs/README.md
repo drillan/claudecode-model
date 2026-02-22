@@ -21,12 +21,13 @@ graph TD
     arch --> tools
     arch --> dx
 
-    %% Example child specs
+    subgraph examples [" Child Specs（例示）"]
     core_f1["006-streaming<br/><i>Streaming Support</i>"]
     core_f2["007-structured-output<br/><i>Structured Output</i>"]
     sdk_f1["008-retry-logic<br/><i>SDK Retry Logic</i>"]
     tools_f1["009-mcp-discovery<br/><i>MCP Tool Discovery</i>"]
-    dx_f1["010-update-command<br/><i>Update Command</i>"]
+    dx_f1["010-error-messages<br/><i>Error Messages</i>"]
+    end
 
     core --> core_f1
     core --> core_f2
@@ -64,8 +65,8 @@ spec.md, plan.md, tasks.md 等の成果物を持つ。
 | Number | Name | Scope | Related Modules |
 |--------|------|-------|-----------------|
 | 001-architecture | Project Architecture | 全体アーキテクチャ、モジュール関係、データフロー | All |
-| 002-core | Core Model Interface | pydantic-ai Model 実装、request/stream API、セッション管理 | `model.py`, `types.py`, `exceptions.py` |
-| 003-sdk | SDK Bridge | Claude Agent SDK 統合、レスポンス変換、互換パッチ | `response_converter.py`, `_sdk_compat.py`, `cli.py` |
+| 002-core | Core Model Interface | pydantic-ai Model 実装、request/stream API、セッション管理 | `model.py`, `types.py`, `exceptions.py`, `cli.py` |
+| 003-sdk | SDK Bridge | Claude Agent SDK 統合、レスポンス変換、互換パッチ | `response_converter.py`, `_sdk_compat.py` |
 | 004-tools | Tool & MCP System | MCP サーバー、ツール変換、AgentToolset、依存関係シリアライズ | `mcp_integration.py`, `tool_converter.py`, `deps_support.py` |
 | 005-dx | Developer Experience | エラーメッセージ、ログ、ドキュメント、テストインフラ、CLI ツール | `json_utils.py`, SpecKit, CI/CD |
 
@@ -157,5 +158,12 @@ graph LR
     class specify,clarify,plan,tasks,implement cmd
 ```
 
+上記はメインワークフロー。以下の補助コマンドは各フェーズで利用可能:
+- `/speckit.checklist` — 要件品質チェックリスト生成（specify 後）
+- `/speckit.analyze` — spec/plan/tasks の整合性分析（tasks 後）
+- `/speckit.taskstoissues` — タスクを GitHub Issue に変換（tasks 後）
+- `/speckit.constitution` — プロジェクト憲法の更新（任意のタイミング）
+
 親仕様（カテゴリ）は `/speckit.specify` で spec.md のみ作成する。
+カテゴリ仕様は関心領域の定義であり、具体的な実装タスクを伴わないため、
 plan.md 以降の成果物は子仕様（機能）でのみ生成する。
