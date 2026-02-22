@@ -349,16 +349,26 @@ print(result.output)
 
 ### Agent Toolsets
 
-- `ClaudeCodeModel.set_agent_toolsets(toolsets, *, server_name="pydantic_tools")`: Register pydantic-ai tools as MCP server
+- `ClaudeCodeModel.set_agent_toolsets(toolsets, *, server_name="pydantic_tools", transport="auto")`: Register pydantic-ai tools as MCP server
   - `server_name`: Customize the MCP server name (appears as `mcp__<server_name>__<tool_name>` in Claude Code CLI)
+  - `transport`: Transport mode for tool communication
+    - `"auto"` (default): Currently equivalent to `"stdio"`. Will use `"sdk"` when CLI supports it natively.
+    - `"stdio"`: IPC bridge mode via Unix domain socket. Tools are invoked through a bridge process.
+    - `"sdk"`: Legacy SDK mode using `McpSdkServerConfig`. Use when CLI supports `type: "sdk"` natively.
 
 ```python
 model = ClaudeCodeModel()
-# Default: tools appear as mcp__pydantic_tools__<tool_name>
+# Default: IPC bridge mode (auto → stdio)
 model.set_agent_toolsets(tools)
 
-# Custom: tools appear as mcp__team__<tool_name>
-model.set_agent_toolsets(tools, server_name="team")
+# Explicit IPC bridge mode
+model.set_agent_toolsets(tools, transport="stdio")
+
+# Legacy SDK mode
+model.set_agent_toolsets(tools, transport="sdk")
+
+# Custom server name with transport
+model.set_agent_toolsets(tools, server_name="team", transport="auto")
 ```
 
 ### Tool Conversion

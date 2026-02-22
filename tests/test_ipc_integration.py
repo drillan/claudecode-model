@@ -1,10 +1,16 @@
-"""Tests for IPC lifecycle management (US2: Phase 5).
+"""Tests for IPC lifecycle management (US2: Phase 5) and transport selection (US3: Phase 6).
 
 TDD Red phase: These tests MUST fail before implementation.
 
 T019: IPC lifecycle tests — auto-start/stop in request(), stream_messages(),
       request_with_metadata(), cleanup on exception, stale socket detection,
       multiple sequential requests.
+
+T024: Transport selection tests — transport="stdio" → McpStdioServerConfig,
+      transport="sdk" → McpSdkServerConfig (existing behavior),
+      transport="auto" → McpStdioServerConfig (stdio equivalent),
+      default transport is "auto",
+      _process_function_tools() preserves transport mode.
 """
 
 import os
@@ -18,6 +24,7 @@ from claude_agent_sdk.types import Message
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 from claudecode_model.exceptions import CLIExecutionError
+from claudecode_model.ipc import DEFAULT_TRANSPORT
 from claudecode_model.ipc.protocol import (
     SOCKET_FILE_PREFIX,
     SOCKET_FILE_SUFFIX,
@@ -25,6 +32,7 @@ from claudecode_model.ipc.protocol import (
     ToolSchema,
 )
 from claudecode_model.ipc.server import IPCSession
+from claudecode_model.mcp_integration import MCP_SERVER_NAME
 from claudecode_model.model import ClaudeCodeModel
 
 from .conftest import create_mock_result_message
@@ -490,3 +498,219 @@ class TestSocketFilePermissions:
             assert mode == SOCKET_PERMISSIONS
         finally:
             await session.stop()
+
+
+# ── Helpers for US3 Transport Selection ────────────────────────────────
+
+
+def _create_mock_tool(name: str = "my_tool") -> MagicMock:
+    """Create a mock PydanticAITool for transport selection tests."""
+    tool = MagicMock()
+    tool.name = name
+    tool.description = f"Description of {name}"
+    tool.parameters_json_schema = {"type": "object", "properties": {}}
+
+    async def fake_fn(**kwargs: object) -> str:
+        return "result"
+
+    tool.function = fake_fn
+    return tool
+
+
+# ── T024: Transport Selection — transport="stdio" ─────────────────────
+
+
+class TestTransportStdio:
+    """transport="stdio" produces McpStdioServerConfig (type="stdio")."""
+
+    def test_stdio_creates_stdio_config(self) -> None:
+        """set_agent_toolsets(transport="stdio") stores config with type="stdio"."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="stdio")
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+
+    def test_stdio_creates_ipc_session(self) -> None:
+        """transport="stdio" creates an IPCSession on the model."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="stdio")
+
+        assert model._ipc_session is not None
+        assert isinstance(model._ipc_session, IPCSession)
+
+    def test_stdio_config_points_to_bridge(self) -> None:
+        """McpStdioServerConfig args include bridge module path."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="stdio")
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+        assert "claudecode_model.ipc.bridge" in config["args"]
+
+
+# ── T024: Transport Selection — transport="sdk" ───────────────────────
+
+
+class TestTransportSdk:
+    """transport="sdk" produces McpSdkServerConfig (existing behavior)."""
+
+    def test_sdk_creates_sdk_config(self) -> None:
+        """set_agent_toolsets(transport="sdk") stores config with type="sdk"."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="sdk")
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "sdk"
+
+    def test_sdk_does_not_create_ipc_session(self) -> None:
+        """transport="sdk" does not create an IPCSession."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="sdk")
+
+        assert model._ipc_session is None
+
+
+# ── T024: Transport Selection — transport="auto" ──────────────────────
+
+
+class TestTransportAuto:
+    """transport="auto" is equivalent to "stdio"."""
+
+    def test_auto_creates_stdio_config(self) -> None:
+        """set_agent_toolsets(transport="auto") stores config with type="stdio"."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="auto")
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+
+    def test_auto_creates_ipc_session(self) -> None:
+        """transport="auto" creates an IPCSession like "stdio"."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool], transport="auto")
+
+        assert model._ipc_session is not None
+
+
+# ── T024: Transport Selection — default transport ─────────────────────
+
+
+class TestTransportDefault:
+    """Default transport is "auto"."""
+
+    def test_default_transport_is_auto(self) -> None:
+        """DEFAULT_TRANSPORT constant is "auto"."""
+        assert DEFAULT_TRANSPORT == "auto"
+
+    def test_default_transport_creates_stdio_config(self) -> None:
+        """set_agent_toolsets() without transport creates config with type="stdio"."""
+        model = ClaudeCodeModel()
+        tool = _create_mock_tool()
+        model.set_agent_toolsets([tool])
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+
+
+# ── T024/T026: _process_function_tools() preserves transport mode ─────
+
+
+class TestProcessFunctionToolsTransportPreservation:
+    """_process_function_tools() re-creates the correct config type per transport."""
+
+    def test_stdio_preserved_after_tool_filtering(self) -> None:
+        """After _process_function_tools(), stdio transport still produces
+        config with type="stdio" (not type="sdk")."""
+        model = ClaudeCodeModel()
+        tool1 = _create_mock_tool("tool_a")
+        tool2 = _create_mock_tool("tool_b")
+        model.set_agent_toolsets([tool1, tool2], transport="stdio")
+
+        # Simulate pydantic-ai passing a subset of tools via function_tools
+        tool_def = MagicMock()
+        tool_def.name = "tool_a"
+        model._process_function_tools([tool_def])
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+
+    def test_sdk_preserved_after_tool_filtering(self) -> None:
+        """After _process_function_tools(), sdk transport still produces
+        config with type="sdk"."""
+        model = ClaudeCodeModel()
+        tool1 = _create_mock_tool("tool_a")
+        tool2 = _create_mock_tool("tool_b")
+        model.set_agent_toolsets([tool1, tool2], transport="sdk")
+
+        tool_def = MagicMock()
+        tool_def.name = "tool_a"
+        model._process_function_tools([tool_def])
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "sdk"
+
+    def test_auto_preserved_after_tool_filtering(self) -> None:
+        """After _process_function_tools(), auto transport still produces
+        config with type="stdio"."""
+        model = ClaudeCodeModel()
+        tool1 = _create_mock_tool("tool_a")
+        tool2 = _create_mock_tool("tool_b")
+        model.set_agent_toolsets([tool1, tool2], transport="auto")
+
+        tool_def = MagicMock()
+        tool_def.name = "tool_a"
+        model._process_function_tools([tool_def])
+
+        servers = model.get_mcp_servers()
+        config = servers[MCP_SERVER_NAME]
+        assert config["type"] == "stdio"
+
+    def test_ipc_session_regenerated_after_filtering(self) -> None:
+        """After _process_function_tools() in stdio mode, a new IPCSession
+        is created for the filtered tool set."""
+        model = ClaudeCodeModel()
+        tool1 = _create_mock_tool("tool_a")
+        tool2 = _create_mock_tool("tool_b")
+        model.set_agent_toolsets([tool1, tool2], transport="stdio")
+
+        original_session = model._ipc_session
+        assert original_session is not None
+
+        tool_def = MagicMock()
+        tool_def.name = "tool_a"
+        model._process_function_tools([tool_def])
+
+        new_session = model._ipc_session
+        assert new_session is not None
+        # New session should be a different object (regenerated)
+        assert new_session is not original_session
+
+    def test_sdk_no_ipc_session_after_filtering(self) -> None:
+        """After _process_function_tools() in sdk mode, no IPCSession exists."""
+        model = ClaudeCodeModel()
+        tool1 = _create_mock_tool("tool_a")
+        tool2 = _create_mock_tool("tool_b")
+        model.set_agent_toolsets([tool1, tool2], transport="sdk")
+
+        assert model._ipc_session is None
+
+        tool_def = MagicMock()
+        tool_def.name = "tool_a"
+        model._process_function_tools([tool_def])
+
+        assert model._ipc_session is None

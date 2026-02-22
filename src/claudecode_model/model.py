@@ -155,6 +155,7 @@ class ClaudeCodeModel(Model):
         self._tools_cache: dict[str, PydanticAITool] = {}
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
+        self._transport: TransportType = DEFAULT_TRANSPORT
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -1020,12 +1021,21 @@ class ClaudeCodeModel(Model):
             )
 
         if matched_tools:
-            # Update MCP server with matched tools only
+            # Update MCP server with matched tools only, preserving transport mode
             server_name = self._current_server_name
-            self._mcp_servers[server_name] = create_mcp_server_from_tools(
-                name=server_name,
-                toolsets=matched_tools,
+            effective_transport = (
+                "stdio" if self._transport == "auto" else self._transport
             )
+
+            if effective_transport == "stdio":
+                # Regenerate IPC session for filtered tools (FR-012)
+                self._prepare_ipc_session(server_name, matched_tools)
+            else:
+                # SDK mode: use existing create_mcp_server_from_tools
+                self._mcp_servers[server_name] = create_mcp_server_from_tools(
+                    name=server_name,
+                    toolsets=matched_tools,
+                )
 
     async def _start_ipc_server(self) -> None:
         """Start the IPC server if an IPC session is configured.
@@ -1258,6 +1268,7 @@ class ClaudeCodeModel(Model):
             )
         self._current_server_name = server_name
         self._agent_toolsets = toolsets
+        self._transport = transport
 
         # Build tools cache for efficient lookup in _find_tools_by_names
         self._tools_cache = {}
