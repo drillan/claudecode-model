@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "skills": {
+    "docs-sync": {
+      "source": "drillan/speckit-gates",
+      "sourceType": "github",
+      "computedHash": "c33b23a145c620034f44eaf0db794b37e4aa466850da3435c336eb83f51557a1"
+    },
+    "implementation-verify": {
+      "source": "drillan/speckit-gates",
+      "sourceType": "github",
+      "computedHash": "0306dc7909eb86d09c7d56297e545c0ae9b5ca6b15c36f08fa589fb5c05ef3bd"
+    },
+    "planning-validate": {
+      "source": "drillan/speckit-gates",
+      "sourceType": "github",
+      "computedHash": "077c092746bccb708207ccc4f9dfd9c6694034391392281cf4ab694da68d00f5"
+    },
+    "progress-report": {
+      "source": "drillan/speckit-gates",
+      "sourceType": "github",
+      "computedHash": "dce69077b82c885891f7c1012dbf9383bc5abd9507443c10230f8fbea7518655"
+    },
+    "release-check": {
+      "source": "drillan/speckit-gates",
+      "sourceType": "github",
+      "computedHash": "0998d568494477e06414ea06da8000d49ab06064d22017797b56dab26e1f13ac"
+    }
+  }
+}
