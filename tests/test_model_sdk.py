@@ -134,6 +134,156 @@ class TestClaudeCodeModelResultMessageToCLIResponse:
 
         assert cli_response.total_cost_usd == 0.05
 
+    def test_converts_result_message_with_server_tool_use(self) -> None:
+        """_result_message_to_cli_response should convert server_tool_use in usage."""
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "server_tool_use": {
+                    "web_search_requests": 3,
+                    "web_fetch_requests": 2,
+                },
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.usage.server_tool_use is not None
+        assert cli_response.usage.server_tool_use.web_search_requests == 3
+        assert cli_response.usage.server_tool_use.web_fetch_requests == 2
+
+    def test_converts_result_message_with_cache_creation(self) -> None:
+        """_result_message_to_cli_response should convert cache_creation in usage."""
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 10,
+                "cache_read_input_tokens": 5,
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 1000,
+                    "ephemeral_5m_input_tokens": 500,
+                },
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.usage.cache_creation is not None
+        assert cli_response.usage.cache_creation.ephemeral_1h_input_tokens == 1000
+        assert cli_response.usage.cache_creation.ephemeral_5m_input_tokens == 500
+
+    def test_converts_result_message_with_service_tier(self) -> None:
+        """_result_message_to_cli_response should convert service_tier in usage."""
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "service_tier": "standard",
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.usage.service_tier == "standard"
+
+    def test_converts_result_message_with_full_usage(self) -> None:
+        """_result_message_to_cli_response should convert all usage fields."""
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": 200,
+                "output_tokens": 100,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 25,
+                "service_tier": "standard",
+                "server_tool_use": {
+                    "web_search_requests": 5,
+                    "web_fetch_requests": 3,
+                },
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 2000,
+                    "ephemeral_5m_input_tokens": 800,
+                },
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        assert cli_response.usage.input_tokens == 200
+        assert cli_response.usage.output_tokens == 100
+        assert cli_response.usage.cache_creation_input_tokens == 50
+        assert cli_response.usage.cache_read_input_tokens == 25
+        assert cli_response.usage.service_tier == "standard"
+        assert cli_response.usage.server_tool_use is not None
+        assert cli_response.usage.server_tool_use.web_search_requests == 5
+        assert cli_response.usage.server_tool_use.web_fetch_requests == 3
+        assert cli_response.usage.cache_creation is not None
+        assert cli_response.usage.cache_creation.ephemeral_1h_input_tokens == 2000
+        assert cli_response.usage.cache_creation.ephemeral_5m_input_tokens == 800
+
+    def test_usage_conversion_handles_unexpected_types_safely(self) -> None:
+        """_result_message_to_cli_response should use _safe_int for type safety."""
+        model = ClaudeCodeModel()
+        result = ResultMessage(
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            result="Response",
+            usage={
+                "input_tokens": "100",  # string instead of int
+                "output_tokens": 50.5,  # float instead of int
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        )
+
+        cli_response = model._result_message_to_cli_response(result)
+
+        # _safe_int should convert string "100" to int 100
+        assert cli_response.usage.input_tokens == 100
+        # _safe_int should convert float 50.5 to int 50
+        assert cli_response.usage.output_tokens == 50
+
     def test_converts_error_result_message(self) -> None:
         """_result_message_to_cli_response should preserve is_error flag."""
         model = ClaudeCodeModel()

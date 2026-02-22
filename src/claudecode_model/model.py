@@ -46,9 +46,9 @@ from claudecode_model.mcp_integration import (
     PydanticAITool,
     create_mcp_server_from_tools,
 )
+from claudecode_model.response_converter import convert_usage_dict_to_cli_usage
 from claudecode_model.types import (
     CLIResponse,
-    CLIUsage,
     JsonValue,
     MessageCallbackType,
     RequestWithMetadataResult,
@@ -781,12 +781,10 @@ class ClaudeCodeModel(Model):
                 result.subtype,
             )
 
-        usage_data = result.usage
-        if usage_data is None:
+        if result.usage is None:
             logger.warning(
                 "ResultMessage.usage is None, using default values of 0 for all usage fields"
             )
-            usage_data = {}
 
         # Try to unwrap parameters wrapper if structured_output is not set
         structured_output = result.structured_output
@@ -805,14 +803,7 @@ class ClaudeCodeModel(Model):
             result=result.result or "",
             session_id=result.session_id,
             total_cost_usd=result.total_cost_usd,
-            usage=CLIUsage(
-                input_tokens=usage_data.get("input_tokens", 0),
-                output_tokens=usage_data.get("output_tokens", 0),
-                cache_creation_input_tokens=usage_data.get(
-                    "cache_creation_input_tokens", 0
-                ),
-                cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
-            ),
+            usage=convert_usage_dict_to_cli_usage(result.usage),
             structured_output=structured_output,
         )
 
