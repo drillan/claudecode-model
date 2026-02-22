@@ -161,9 +161,10 @@ model.py ─────► cli.py (定数のみ)
     │
     ├──► types.py
     ├──► exceptions.py
-    ├──► mcp_integration.py ──► tool_converter.py ──► deps_support.py
+    ├──► mcp_integration.py ──► types.py (JsonValue)
     └──► _sdk_compat.py (副作用インポート)
 
+tool_converter.py ──► deps_support.py
 response_converter.py ──► types.py
 json_utils.py ──► types.py (JsonValue 型のみ)
 ```
