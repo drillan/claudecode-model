@@ -40,11 +40,11 @@
 
 ### Tests
 
-- [ ] T005 Write tests for IPC protocol module in `tests/test_ipc_protocol.py`: message TypedDict construction, length-prefix framing (send/receive round-trip), MAX_MESSAGE_SIZE exceeded error, empty message handling, invalid JSON handling
+- [ ] T005 Write tests for IPC protocol module in `tests/test_ipc_protocol.py`: message TypedDict construction, ToolSchema construction and JSON serialization round-trip (`list[ToolSchema]`), length-prefix framing (send/receive round-trip), MAX_MESSAGE_SIZE exceeded error, empty message handling, invalid JSON handling
 
 ### Implementation
 
-- [ ] T006 [P] Implement protocol constants (`MAX_MESSAGE_SIZE`, `LENGTH_PREFIX_SIZE`, `SOCKET_PERMISSIONS`, `SOCKET_FILE_PREFIX`, `SOCKET_FILE_SUFFIX`, `SCHEMA_FILE_PREFIX`) and message TypedDicts (`IPCRequest`, `CallToolParams`, `IPCResponse`, `ToolResult`, `ToolResultContent`, `IPCErrorResponse`, `IPCErrorPayload`) in `src/claudecode_model/ipc/protocol.py`
+- [ ] T006 [P] Implement protocol constants (`MAX_MESSAGE_SIZE`, `LENGTH_PREFIX_SIZE`, `SOCKET_PERMISSIONS`, `SOCKET_FILE_PREFIX`, `SOCKET_FILE_SUFFIX`, `SCHEMA_FILE_PREFIX`) and message TypedDicts (`IPCRequest`, `CallToolParams`, `IPCResponse`, `ToolResult`, `ToolResultContent`, `IPCErrorResponse`, `IPCErrorPayload`, `ToolSchema`) in `src/claudecode_model/ipc/protocol.py`
 - [ ] T007 Implement length-prefixed message framing functions (`send_message`, `receive_message`) with `IPCMessageSizeError` validation in `src/claudecode_model/ipc/protocol.py`
 
 **Checkpoint**: Protocol layer ready - `send_message`/`receive_message` で IPC メッセージの送受信が可能
@@ -136,7 +136,7 @@
 ### Implementation for User Story 3
 
 - [ ] T025 [US3] Add `transport: TransportType = DEFAULT_TRANSPORT` keyword argument to `set_agent_toolsets()` and implement routing logic (sdk → existing `create_mcp_server_from_tools()`, stdio/auto → IPC bridge) in `src/claudecode_model/model.py`
-- [ ] T026 [US3] Update `_process_function_tools()` to preserve transport mode when re-filtering tools and regenerating MCP server config in `src/claudecode_model/model.py`
+- [ ] T026 [US3] Update `_process_function_tools()` to preserve transport mode when re-filtering tools, regenerate IPC configuration (socket path, schema file, McpStdioServerConfig) for filtered tools, and ensure the next request's `_start_ipc_server()` picks up the updated configuration (FR-012 sync/async gap handling) in `src/claudecode_model/model.py`
 
 **Checkpoint**: `transport="sdk"` で既存動作が維持され、`transport="stdio"` で IPC ブリッジが使用される
 
