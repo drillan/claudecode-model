@@ -11,7 +11,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from typing import Protocol, TypedDict, runtime_checkable
 
 from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server, tool
-from claude_agent_sdk.types import McpSdkServerConfig
+from claude_agent_sdk.types import McpSdkServerConfig, McpStdioServerConfig
 
 from claudecode_model.types import JsonValue
 
@@ -239,6 +239,31 @@ def convert_tool_definition(tool_def: ToolDefinition) -> SdkMcpTool[dict[str, ob
 
 
 MCP_SERVER_NAME = "pydantic_tools"
+
+
+def create_stdio_mcp_config(
+    socket_path: str,
+    schema_path: str,
+) -> McpStdioServerConfig:
+    """Create an ``McpStdioServerConfig`` pointing to the IPC bridge process.
+
+    The bridge process is started by the CLI as a subprocess using
+    ``python -m claudecode_model.ipc.bridge <socket_path> <schema_path>``.
+
+    Args:
+        socket_path: Path to the parent process IPC Unix socket.
+        schema_path: Path to the tool schema JSON file.
+
+    Returns:
+        ``McpStdioServerConfig`` suitable for ``ClaudeAgentOptions.mcp_servers``.
+    """
+    import sys
+
+    return McpStdioServerConfig(
+        type="stdio",
+        command=sys.executable,
+        args=["-m", "claudecode_model.ipc.bridge", socket_path, schema_path],
+    )
 
 
 def create_mcp_server_from_tools(
