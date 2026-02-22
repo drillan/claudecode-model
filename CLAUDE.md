@@ -41,7 +41,7 @@
 ## 命名規則
 
 - 詳細: `.claude/git-conventions.md`
-- specs/: `<3桁issue番号>-<name>`（例: `001-issue-workflow`）
+- specs/: `<3桁通し番号>-<name>`（例: `001-issue-workflow`）
 - ブランチ: ゼロパディングなし
 
 ## Python
