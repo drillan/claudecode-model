@@ -46,18 +46,24 @@ from claudecode_model.deps_support import (  # noqa: E402
     serialize_deps,
 )
 from claudecode_model.exceptions import (  # noqa: E402
+    BridgeStartupError,
     CLIExecutionError,
     CLIInterruptedError,
     CLINotFoundError,
     CLIResponseParseError,
     ClaudeCodeError,
     ErrorType,
+    IPCConnectionError,
+    IPCError,
+    IPCMessageSizeError,
+    IPCToolExecutionError,
     StructuredOutputError,
     ToolNotFoundError,
     ToolsetNotRegisteredError,
     TypeHintResolutionError,
     UnsupportedDepsTypeError,
 )
+from claudecode_model.ipc import DEFAULT_TRANSPORT, TransportType  # noqa: E402
 from claudecode_model.json_utils import extract_json  # noqa: E402
 from claudecode_model.model import ClaudeCodeModel  # noqa: E402
 from claudecode_model.response_converter import (  # noqa: E402
@@ -129,6 +135,15 @@ __all__ = [
     "McpResponse",
     "McpServerConfig",
     "McpTextContent",
+    # IPC bridge types
+    "TransportType",
+    "DEFAULT_TRANSPORT",
+    # IPC exceptions
+    "IPCError",
+    "IPCConnectionError",
+    "IPCMessageSizeError",
+    "IPCToolExecutionError",
+    "BridgeStartupError",
     # Serializable deps support (experimental)
     "DepsContext",
     "create_deps_context",

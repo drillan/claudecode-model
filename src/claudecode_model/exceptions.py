@@ -156,6 +156,26 @@ class TypeHintResolutionError(ClaudeCodeError):
         self.original_error = original_error
 
 
+class IPCError(ClaudeCodeError):
+    """Base exception for IPC communication errors."""
+
+
+class IPCConnectionError(IPCError):
+    """Raised when the bridge process cannot connect to the IPC server."""
+
+
+class IPCMessageSizeError(IPCError):
+    """Raised when an IPC message exceeds MAX_MESSAGE_SIZE."""
+
+
+class IPCToolExecutionError(IPCError):
+    """Raised when a tool function raises an error during IPC execution."""
+
+
+class BridgeStartupError(IPCError):
+    """Raised when the bridge process fails to start."""
+
+
 class StructuredOutputError(ClaudeCodeError):
     """Raised when structured output extraction fails after maximum retries.
 
