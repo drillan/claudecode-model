@@ -14,6 +14,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from claude_agent_sdk.types import (
     AssistantMessage,
     McpSdkServerConfig,
+    McpStdioServerConfig,
     Message,
     ToolUseBlock,
 )
@@ -40,11 +41,17 @@ from claudecode_model.exceptions import (
     ToolNotFoundError,
     ToolsetNotRegisteredError,
 )
+from claudecode_model.ipc import DEFAULT_TRANSPORT, TransportType
+from claudecode_model.ipc.protocol import ToolSchema
+from claudecode_model.ipc.server import IPCSession, ToolHandler
 from claudecode_model.mcp_integration import (
     MCP_SERVER_NAME,
     AgentToolset,
     PydanticAITool,
     create_mcp_server_from_tools,
+    create_stdio_mcp_config,
+    create_tool_wrapper,
+    extract_tools_from_toolsets,
 )
 from claudecode_model.response_converter import convert_usage_dict_to_cli_usage
 from claudecode_model.types import (
@@ -143,10 +150,11 @@ class ClaudeCodeModel(Model):
         self._message_callback = message_callback
         self._continue_conversation = continue_conversation
         self._interrupt_handler = interrupt_handler
-        self._mcp_servers: dict[str, McpSdkServerConfig] = {}
+        self._mcp_servers: dict[str, McpSdkServerConfig | McpStdioServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
         self._current_server_name: str = MCP_SERVER_NAME
+        self._ipc_session: IPCSession | None = None
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -1190,6 +1198,7 @@ class ClaudeCodeModel(Model):
         toolsets: Sequence[PydanticAITool] | AgentToolset | None,
         *,
         server_name: str = MCP_SERVER_NAME,
+        transport: TransportType = DEFAULT_TRANSPORT,
     ) -> None:
         """Register pydantic-ai Agent toolsets for MCP server exposure.
 
@@ -1201,6 +1210,10 @@ class ClaudeCodeModel(Model):
             server_name: MCP server name used as prefix in
                 ``mcp__<server_name>__<tool_name>``.
                 Defaults to ``MCP_SERVER_NAME`` (``"pydantic_tools"``).
+            transport: Transport mode for tool communication.
+                ``"auto"`` (default) is currently equivalent to ``"stdio"``.
+                ``"stdio"`` uses IPC bridge mode via Unix domain socket.
+                ``"sdk"`` uses legacy SDK mode (``McpSdkServerConfig``).
 
         Note:
             Calling this method multiple times will overwrite the previous toolsets.
@@ -1219,27 +1232,96 @@ class ClaudeCodeModel(Model):
         self._tools_cache = {}
         tools_for_mcp: Sequence[PydanticAITool] | None
         if isinstance(toolsets, AgentToolset):
-            for name, tool in toolsets.tools.items():
-                self._tools_cache[name] = tool
+            for name, tool_obj in toolsets.tools.items():
+                self._tools_cache[name] = tool_obj
             tools_for_mcp = list(toolsets.tools.values())
         elif toolsets is not None:
-            for tool in toolsets:
-                self._tools_cache[tool.name] = tool
+            for tool_obj in toolsets:
+                self._tools_cache[tool_obj.name] = tool_obj
             tools_for_mcp = toolsets
         else:
             tools_for_mcp = None
 
-        self._mcp_servers[server_name] = create_mcp_server_from_tools(
-            name=server_name,
-            toolsets=tools_for_mcp,
-        )
+        # Choose MCP server type based on transport mode
+        effective_transport = "stdio" if transport == "auto" else transport
+
+        if effective_transport == "stdio" and tools_for_mcp is not None:
+            self._prepare_ipc_session(server_name, tools_for_mcp)
+        else:
+            # SDK mode or no tools
+            self._ipc_session = None
+            self._mcp_servers[server_name] = create_mcp_server_from_tools(
+                name=server_name,
+                toolsets=tools_for_mcp,
+            )
 
         registered_names = list(self._tools_cache.keys())
         logger.debug(
-            "set_agent_toolsets: registered %d tools, server_name=%s, tool_names=%s",
+            "set_agent_toolsets: registered %d tools, server_name=%s, "
+            "transport=%s, tool_names=%s",
             len(registered_names),
             server_name,
+            transport,
             registered_names,
+        )
+
+    def _prepare_ipc_session(
+        self,
+        server_name: str,
+        tools: Sequence[PydanticAITool],
+    ) -> None:
+        """Prepare an IPC session: build handlers, schemas, and stdio config.
+
+        Creates the ``IPCSession`` with tool handlers and schemas, writes the
+        schema file, and stores an ``McpStdioServerConfig`` in ``_mcp_servers``.
+        The server is NOT started here — that happens in ``request()`` lifecycle.
+
+        Args:
+            server_name: MCP server name.
+            tools: Sequence of pydantic-ai tools to expose.
+        """
+        # Extract tool definitions for schema generation
+        tool_defs = extract_tools_from_toolsets(tools)
+
+        # Build tool handlers: name → async wrapper
+        tool_handlers: dict[str, ToolHandler] = {}
+        tool_schemas: list[ToolSchema] = []
+
+        for td in tool_defs:
+            name = td["name"]
+            original_fn = td.get("function")
+            if original_fn is not None:
+                tool_handlers[name] = create_tool_wrapper(name, original_fn)
+
+            tool_schemas.append(
+                {
+                    "name": td["name"],
+                    "description": td["description"],
+                    "input_schema": dict(td["input_schema"]),
+                }
+            )
+
+        # Create IPC session (generates socket/schema paths with UUID)
+        session = IPCSession(
+            tool_handlers=tool_handlers,
+            tool_schemas=tool_schemas,
+        )
+        self._ipc_session = session
+
+        # Write schema file immediately (server starts later in request lifecycle)
+        session._write_schema_file()
+
+        # Store McpStdioServerConfig for the CLI to use
+        self._mcp_servers[server_name] = create_stdio_mcp_config(
+            socket_path=session.socket_path,
+            schema_path=session.schema_path,
+        )
+
+        logger.debug(
+            "_prepare_ipc_session: socket=%s, schema=%s, handlers=%d",
+            session.socket_path,
+            session.schema_path,
+            len(tool_handlers),
         )
 
     def _find_tools_by_names(
@@ -1281,11 +1363,11 @@ class ClaudeCodeModel(Model):
         """
         return list(self._tools_cache.keys())
 
-    def get_mcp_servers(self) -> dict[str, McpSdkServerConfig]:
+    def get_mcp_servers(self) -> dict[str, McpSdkServerConfig | McpStdioServerConfig]:
         """Return registered MCP servers.
 
         Returns:
-            Dictionary mapping server names to McpSdkServerConfig objects.
+            Dictionary mapping server names to MCP server config objects.
         """
         return self._mcp_servers
 
