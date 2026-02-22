@@ -1,15 +1,14 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 (新規作成)
-Modified principles: N/A (新規作成)
-Added sections:
-  - Core Principles (Article 1-4)
-  - Quality Assurance & Constraints (Article 5-8)
-  - Project Standards (Article 9-11)
-  - Governance (Amendment Procedure, Versioning Policy,
-    Compliance Review, Application Principles)
-Removed sections: N/A (新規作成)
+Version change: 1.0.0 → 1.0.1 (レビュー指摘対応)
+Modified principles:
+  - Article 3: 依存関係の原則を削除（Article 4 と重複のため）
+  - Article 9: コード例をプロジェクト実在の型に差し替え
+Added sections: N/A
+Removed sections: N/A
+Related fixes:
+  - CLAUDE.md: specs/ 命名を「issue番号」→「通し番号」に修正
 Templates requiring updates:
   - .specify/templates/plan-template.md: ✅ 整合性確認済み
     （Constitution Checkセクション対応）
@@ -80,11 +79,6 @@ Follow-up TODOs: None
 3. エラーメッセージは具体的な解決方法を含めなければならない（MUST）
 4. 終了コードは成功（0）と失敗（非0）を適切に返さなければならない
    （MUST）
-
-**依存関係の原則**:
-- pydantic-ai、claude-agent-sdkの公開APIを直接使用しなければならない
-  （MUST）
-- 不必要なラッパーレイヤーを作成してはならない（MUST NOT）
 
 **理由**: ライブラリとしての一貫したAPI体験と保守性を保証
 
@@ -250,23 +244,29 @@ Don't Repeat Yourself - 同じ知識を複数の場所で表現してはなら�
 **実装例**:
 
 ```python
-# 良い例（推奨）
-from pydantic import BaseModel
+# 良い例（推奨） - src/claudecode_model/types.py より
+from pydantic import BaseModel, Field
 
-class ToolResult(BaseModel):
-    name: str
-    content: str
-    is_error: bool | None = None
+class CLIResponse(BaseModel):
+    """Parsed response from Claude Code CLI JSON output."""
+    type: str
+    subtype: str
+    is_error: bool
+    result: str = ""
+    session_id: str | None = None
+    total_cost_usd: float | None = None
+    usage: CLIUsage
+    model_usage: dict[str, ModelUsageData] | None = Field(
+        default=None, alias="modelUsage"
+    )
 
-async def convert_response(
-    response: StreamedResponse,
-) -> list[ModelResponsePart]:
-    """レスポンスを変換し、パーツのリストを返す"""
-    ...
+def parse_cli_response(json_data: CLIResponseData) -> CLIResponse:
+    """Parse CLI JSON output into CLIResponse."""
+    return CLIResponse.model_validate(json_data)
 
 # 悪い例（禁止）
-def convert_response(response):  # 型注釈なし
-    return response
+def parse_cli_response(json_data):  # 型注釈なし
+    return json_data
 ```
 
 **理由**: 静的型チェックによりバグの早期発見、コード可読性向上、
@@ -380,4 +380,4 @@ SpecKitで生成されるディレクトリ（`specs/`配下）は、以下の�
 
 ---
 
-**Version**: 1.0.0 | **Ratified**: 2026-02-22 | **Last Amended**: 2026-02-22
+**Version**: 1.0.1 | **Ratified**: 2026-02-22 | **Last Amended**: 2026-02-22
