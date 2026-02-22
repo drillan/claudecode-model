@@ -108,19 +108,19 @@
 
 ### Edge Cases
 
-- `ResultMessage.usage` が `None` の場合、デフォルト値 0 を使用しログ警告を出力する
+- `ResultMessage.usage` が `None` の場合、`CLIExecutionError` を送出すべきである。**現在の実装はデフォルト値 0 を代入しており、デザイン原則 #2（暗黙的な値の代入禁止）に違反している。子仕様で修正が必要。**
 - `ResultMessage.result` と `structured_output` の両方が空の場合、`CLIResponse` のバリデーションで `ValueError` が送出される（ただし `error_` サブタイプは除外）
 - SDK が未知の `error_` サブタイプを返した場合（`is_error=False`）、警告ログを出力する
 - プロンプトが空または `MAX_PROMPT_LENGTH` を超える場合、`ValueError` が送出される
 - `claude` CLI が見つからない場合、`CLINotFoundError` が送出される（解決方法を含むメッセージ付き）
-- `model_settings` の型が不正な場合（例: `timeout` に文字列）、警告ログを出力し設定を無視する
+- `model_settings` の型が不正な場合（例: `timeout` に文字列）、`TypeError` を送出すべきである。**現在の実装は `working_directory` のみ `TypeError` を送出し、他のフィールドは警告ログを出力して無視するという不整合がある。子仕様で統一が必要。**
 - 構造化出力で `{"parameter": {...}}` や `{"output": {...}}` ラッパーが使われた場合も自動除去する
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: システムは pydantic-ai の `Model` インターフェース（`request()`）を実装しなければならない
+- **FR-001**: システムは pydantic-ai の `Model` インターフェース（`request()`）を実装しなければならない。なお、pydantic-ai の `Model.request_stream()` は意図的に未実装であり、代替として `stream_messages()` を提供する（FR-008 参照）。`stream_messages()` は pydantic-ai の `StreamedResponse` ではなく SDK の `Message` を直接 yield する独自ストリーミングメソッドである
 - **FR-002**: システムは Claude Agent SDK の `query()` 関数を通じてクエリを実行しなければならない
 - **FR-003**: システムは `--json-schema` オプションによる構造化出力をサポートしなければならない
 - **FR-004**: システムは SDK の `ResultMessage` を pydantic-ai の `ModelResponse` に変換しなければならない
@@ -202,7 +202,7 @@
 
 以下の条件に該当する子仕様は `002-core` の子として作成する:
 
-- pydantic-ai の `Model.request()` / `Model.request_stream()` の挙動に影響するか?
+- pydantic-ai の `Model.request()` の挙動、または `stream_messages()` のストリーミング動作に影響するか?
 - `ModelSettings` / `ModelProfile` に新しいフィールドを追加するか?
 - `ClaudeCodeModel` のコンストラクタパラメータに影響するか?
 - `CLIResponse` / `CLIUsage` のフィールドに変更が必要か?

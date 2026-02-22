@@ -33,4 +33,6 @@
 
 - This is a **Category Spec (Parent Spec)**. It defines the scope and design principles for the Core Model Interface category. No plan.md or tasks.md is required.
 - The spec references specific class/method names (ClaudeCodeModel, request(), etc.) because these are part of the **public API contract**, not implementation details. The distinction is that the spec defines WHAT the API surface looks like, not HOW it is implemented internally.
+- **Review fix (PR #114)**: FR-001 に `request_stream()` 未実装の理由と `stream_messages()` が代替である旨を明記。Classification Criteria も整合させた。
+- **Review fix (PR #114)**: Edge Cases の2件（`ResultMessage.usage` が None、`model_settings` の型不正）がデザイン原則 #2 に違反していたため、あるべき挙動を明記し、現在の実装の不整合を子仕様での修正対象として記録した。
 - All items pass validation. Ready for child spec creation under 002-core category.
