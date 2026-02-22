@@ -41,7 +41,7 @@
 ## 命名規則
 
 - 詳細: `.claude/git-conventions.md`
-- specs/: `<3桁通し番号>-<name>`（例: `001-issue-workflow`）
+- specs/: `<3桁通し番号>-<name>`（例: `001-architecture`）
 - ブランチ: ゼロパディングなし
 
 ## Python
@@ -50,10 +50,8 @@
 - `uv run` または `.venv/bin/python` を使用
 
 ## Active Technologies
-- Python 3.13+ + Typer, Pydantic, Rich, readchar, uv (001-issue-workflow)
-- ファイルベース（`.claude/workflow-config.json`, `.claude/git-conventions.md`） (001-issue-workflow)
-- Python 3.13+ + Typer 0.15+, Pydantic 2.10+, Rich 13.9+, shutil, pathlib (010-update-command)
-- ファイルシステム（`.claude/commands/`, `.claude/skills/`） (010-update-command)
+- Python 3.13+, pydantic-ai, claude-agent-sdk
+- uv (パッケージ管理)
 
 ## Recent Changes
-- 001-issue-workflow: Updated to Python 3.13+ with latest dependencies (Typer 0.15+, Pydantic 2.10+, Rich 13.9+)
+
