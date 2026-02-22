@@ -50,10 +50,8 @@
 - `uv run` または `.venv/bin/python` を使用
 
 ## Active Technologies
-- Python 3.13+, pydantic-ai, claude-agent-sdk
+- Python 3.13+, pydantic-ai, claude-agent-sdk, mcp
 - uv (パッケージ管理)
-- Python 3.13+ + pydantic-ai>=1.42.0, claude-agent-sdk>=0.1.20, mcp>=1.0.0（新規追加） (006-ipc-bridge)
-- 一時ファイル（ツールスキーマ）、Unix domain socket (006-ipc-bridge)
 
 ## Recent Changes
 

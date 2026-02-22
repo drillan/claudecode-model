@@ -280,7 +280,7 @@ FR-012: `_process_function_tools()` は同期メソッドだが、IPC サーバ�
 ### Flow
 
 ```
-request() / stream_messages():
+request() / stream_messages() / request_with_metadata():
   1. _process_function_tools()     [sync] → ツールフィルタ + MCP設定更新
   2. _prepare_ipc_session()        [sync] → スキーマファイル書き出し + StdioConfig生成
   3. await _start_ipc_server()     [async] → Unix socket サーバー起動

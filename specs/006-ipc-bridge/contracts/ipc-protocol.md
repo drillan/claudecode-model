@@ -11,7 +11,9 @@
   - 4 bytes: payload length (big-endian unsigned 32-bit integer)
   - N bytes: UTF-8 encoded JSON payload
 - **Connection model**: Persistent connection (lazy connect on first `call_tool`)
-- **Concurrency**: Sequential (one request at a time per connection)
+- **Concurrency**: Strictly sequential (one request at a time per connection)
+  - The bridge MUST wait for a response before sending the next request
+  - Sending concurrent requests on the same connection is a protocol violation
 - **Max message size**: 10,485,760 bytes (10 MB)
 
 ## Messages

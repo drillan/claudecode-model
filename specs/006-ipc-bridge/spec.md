@@ -92,7 +92,7 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 ### Functional Requirements
 
 - **FR-001**: システムは `set_agent_toolsets()` で登録したツールを、CLI が認識する MCP サーバー形式として提供しなければならない
-- **FR-002**: システムは親プロセスとブリッジプロセス間で IPC 通信を確立し、ツール一覧の取得（`list_tools`）とツール実行（`call_tool`）をサポートしなければならない
+- **FR-002**: システムは親プロセスとブリッジプロセス間で IPC 通信を確立し、ツール実行（`call_tool`）をサポートしなければならない。ツール一覧の取得（`list_tools`）はブリッジプロセスがスキーマファイルからローカルで応答する
 - **FR-003**: ブリッジプロセスは MCP プロトコル（JSON-RPC 2.0 over stdin/stdout）に準拠し、CLI から見て標準的な stdio MCP サーバーとして動作しなければならない
 - **FR-004**: システムは IPC サーバーのライフサイクル（起動・停止・クリーンアップ）を `model.request()` / `model.stream_messages()` / `model.request_with_metadata()` のライフサイクルに統合しなければならない
 - **FR-005**: システムは `transport` パラメータにより、IPC ブリッジ方式（`"stdio"`）と従来の SDK 方式（`"sdk"`）を切り替え可能でなければならない。`"auto"` は現時点では `"stdio"` と同等に動作する（CLI バージョン検出等の動的判定は行わない）

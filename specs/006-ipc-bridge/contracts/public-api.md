@@ -37,6 +37,11 @@ def set_agent_toolsets(
 - Added `transport` keyword argument (backward-compatible, has default value)
 - No breaking changes to existing callers (FR-011)
 
+**Internal type change** (not part of public API):
+- `self._mcp_servers` type annotation widens from `dict[str, McpSdkServerConfig]` to `dict[str, McpSdkServerConfig | McpStdioServerConfig]`
+- `get_mcp_servers()` return type widens accordingly
+- `ClaudeAgentOptions.mcp_servers` accepts `dict[str, McpSdkServerConfig | McpStdioServerConfig]` (verified compatible)
+
 **Behavior by transport value**:
 
 | Value | Behavior |

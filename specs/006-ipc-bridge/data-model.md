@@ -95,13 +95,13 @@ type TransportType = Literal["auto", "stdio", "sdk"]
 
 | フィールド | 型 | 必須 | 説明 |
 |------------|------|------|------|
-| `error` | `IPCError` | Yes | エラー情報 |
+| `error` | `IPCErrorPayload` | Yes | エラー情報 |
 
 ---
 
-### IPCError
+### IPCErrorPayload
 
-IPC エラー情報。
+IPC エラー情報（ワイヤプロトコル上の構造体。Python 例外クラス `IPCError` とは別物）。
 
 | フィールド | 型 | 必須 | 説明 |
 |------------|------|------|------|
@@ -159,10 +159,11 @@ Created → Started → Stopped
 ツール実行関数の型エイリアス。
 
 ```python
-type ToolHandler = Callable[[dict[str, object]], Awaitable[McpResponse]]
+type ToolHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 ```
 
 既存の `mcp_integration.create_tool_wrapper()` が生成するラッパー関数と同じシグネチャ。
+戻り値は MCP 互換形式の `dict`（例: `{"content": [{"type": "text", "text": "..."}]}`）。
 
 ---
 
@@ -237,4 +238,4 @@ ClaudeCodeModel
 | `IPCToolExecutionError` | `IPCError` | ツール関数実行中のエラー |
 | `BridgeStartupError` | `IPCError` | ブリッジプロセスの起動失敗 |
 
-**注**: 例外クラス名の `IPCError` は data-model 内のエンティティ名（IPC エラー情報の構造体）と区別するため、Python 実装ではモジュールスコープで区別する。
+**注**: ワイヤプロトコル上のエラー構造体は `IPCErrorPayload` と命名し、Python 例外クラス `IPCError` との混同を防止する。
