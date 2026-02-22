@@ -27,7 +27,7 @@
 
 ### User Story 2 - IPC サーバーのライフサイクル管理 (Priority: P1)
 
-開発者は IPC サーバーのライフサイクルを意識する必要がない。`model.request()` / `model.request_stream()` / `model.request_with_metadata()` の各呼び出し時に自動的にサーバーが起動し、完了時に自動的にクリーンアップされる。ソケットファイルのリーク等のリソース問題が発生しない。
+開発者は IPC サーバーのライフサイクルを意識する必要がない。`model.request()` / `model.stream_messages()` / `model.request_with_metadata()` の各呼び出し時に自動的にサーバーが起動し、完了時に自動的にクリーンアップされる。ソケットファイルのリーク等のリソース問題が発生しない。
 
 **Why this priority**: リソースリークはプロダクション環境で致命的。IPC サーバーが正しく管理されなければ、ツール呼び出しの信頼性が損なわれる。
 
@@ -35,7 +35,7 @@
 
 **Acceptance Scenarios**:
 
-1. **Given** IPC ブリッジが構成されたモデル, **When** `model.request()` / `model.request_stream()` / `model.request_with_metadata()` のいずれかが呼ばれる, **Then** リクエスト開始時にサーバーが起動し、リクエスト完了時にサーバーが停止しソケットファイルが削除される
+1. **Given** IPC ブリッジが構成されたモデル, **When** `model.request()` / `model.stream_messages()` / `model.request_with_metadata()` のいずれかが呼ばれる, **Then** リクエスト開始時にサーバーが起動し、リクエスト完了時にサーバーが停止しソケットファイルが削除される
 2. **Given** リクエスト処理中に例外が発生した場合, **When** 例外が伝播する, **Then** IPC サーバーはクリーンアップされソケットファイルは削除される
 3. **Given** 前回のリクエストで異常終了し stale なソケットファイルが残っている場合, **When** 新しいリクエストが開始される, **Then** stale ファイルが検出・除去され新しいサーバーが正常に起動する
 
@@ -78,7 +78,7 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 - ブリッジプロセスが親プロセスの IPC サーバーに接続できない場合、MCP エラーレスポンスとして CLI に報告される
 - ツール関数実行中に例外が発生した場合、例外情報を含むエラーレスポンスが返される（例外がサイレントに握り潰されることはない）
 - 親プロセスが異常終了した場合、ソケットファイルが一時ディレクトリに残る。次回の `start()` 呼び出しで stale ファイルを検出・削除する
-- コマンドライン引数で渡すツールスキーマ JSON のサイズが OS のコマンドライン長制限を超える場合、明示的なエラーとして報告される
+- ツールスキーマのサイズが受け渡し方式の制限を超える場合、明示的なエラーとして報告される。具体的な受け渡し方式と制限値は plan フェーズで決定する
 - `set_agent_toolsets()` を複数回呼び出した場合、以前の IPC サーバー構成が上書きされる（既存動作と一貫）
 - ブリッジプロセスのソケット接続は `tools/call` 時に初めて確立される（lazy connect）。`tools/list` は起動時に受け取ったツールスキーマから応答するため IPC 不要。スキーマの受け渡し方式（コマンドライン引数、環境変数、一時ファイル等）は plan フェーズで決定する
 - CLI が複数のツール呼び出しを並行で発行する場合、IPC 層で直列化される。CLI の通常動作ではツール呼び出しは逐次実行されるため、初期実装としての直列化は許容範囲と判断する。将来のリクエスト ID ベースの多重化は初期スコープ外
@@ -94,7 +94,7 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 - **FR-001**: システムは `set_agent_toolsets()` で登録したツールを、CLI が認識する MCP サーバー形式として提供しなければならない
 - **FR-002**: システムは親プロセスとブリッジプロセス間で IPC 通信を確立し、ツール一覧の取得（`list_tools`）とツール実行（`call_tool`）をサポートしなければならない
 - **FR-003**: ブリッジプロセスは MCP プロトコル（JSON-RPC 2.0 over stdin/stdout）に準拠し、CLI から見て標準的な stdio MCP サーバーとして動作しなければならない
-- **FR-004**: システムは IPC サーバーのライフサイクル（起動・停止・クリーンアップ）を `model.request()` / `model.request_stream()` / `model.request_with_metadata()` のライフサイクルに統合しなければならない
+- **FR-004**: システムは IPC サーバーのライフサイクル（起動・停止・クリーンアップ）を `model.request()` / `model.stream_messages()` / `model.request_with_metadata()` のライフサイクルに統合しなければならない
 - **FR-005**: システムは `transport` パラメータにより、IPC ブリッジ方式（`"stdio"`）と従来の SDK 方式（`"sdk"`）を切り替え可能でなければならない。`"auto"` は現時点では `"stdio"` と同等に動作する（CLI バージョン検出等の動的判定は行わない）
 - **FR-006**: システムは IPC 通信のメッセージに最大サイズ制限を設けなければならない。制限を超過した場合は明示的なエラーとして報告される（分割送信は行わない）。具体的な制限値は plan フェーズで決定する
 - **FR-007**: ツール関数は親プロセス内で実行されなければならない。ツール関数が元々アクセスするコンテキスト（依存関係、member agents 等）は保持される。ただし `RunContext` の全機能（retry カウンタ、累積 usage 等の Agent ループ固有の状態）の再現は要求しない
@@ -136,7 +136,7 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 - IPC サーバー（親プロセス側サーバー）の実装
 - ブリッジプロセス（stdio MCP サーバー ↔ IPC クライアント中継）の実装
 - `set_agent_toolsets()` への `transport` パラメータ追加と IPC ブリッジ方式の統合
-- `model.request()` / `model.request_stream()` / `model.request_with_metadata()` での IPC サーバーライフサイクル管理
+- `model.request()` / `model.stream_messages()` / `model.request_with_metadata()` での IPC サーバーライフサイクル管理
 - リクエスト時のツールフィルタリングに伴う IPC サーバー・ブリッジの再構築
 - IPC 通信プロトコル
 - ソケットファイルのセキュリティ（パーミッション、パス名のランダム化）
@@ -147,6 +147,7 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 - CLI 側の MCP サーバー起動・管理ロジック（CLI 内部実装）
 - pydantic-ai ツールの MCP サーバー変換ロジック自体（004-tools の既存スコープ）
 - リクエスト ID ベースの並行ツール呼び出し多重化（将来の最適化）
+- Windows プラットフォーム対応（Windows 10 1803+ の Unix domain socket 対応を含む。将来の拡張候補として認識するが初期スコープ外）
 - HTTP/SSE ベースの MCP トランスポート（ただし `transport` パラメータの `Literal` 型は将来の値追加に対応可能な設計とする）
 
 ## Assumptions
@@ -159,4 +160,4 @@ CLI が subprocess として起動するブリッジプロセスは、MCP プロ
 ## Dependencies
 
 - **004-tools**: 親仕様。既存ツール変換パイプラインを再利用する
-- **002-core**: `model.py` の `request()` / `request_stream()` ライフサイクルに IPC サーバー管理を統合する
+- **002-core**: `model.py` の `request()` / `stream_messages()` ライフサイクルに IPC サーバー管理を統合する
