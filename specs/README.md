@@ -21,19 +21,11 @@ graph TD
     arch --> tools
     arch --> dx
 
-    subgraph examples [" Child Specs（例示）"]
-    core_f1["006-streaming<br/><i>Streaming Support</i>"]
-    core_f2["007-structured-output<br/><i>Structured Output</i>"]
-    sdk_f1["008-retry-logic<br/><i>SDK Retry Logic</i>"]
-    tools_f1["009-mcp-discovery<br/><i>MCP Tool Discovery</i>"]
-    dx_f1["010-error-messages<br/><i>Error Messages</i>"]
+    subgraph children [" Child Specs"]
+    tools_f1["006-ipc-bridge<br/><i>IPC Bridge</i>"]
     end
 
-    core --> core_f1
-    core --> core_f2
-    sdk --> sdk_f1
     tools --> tools_f1
-    dx --> dx_f1
 
     classDef root fill:#1a1a2e,stroke:#e94560,color:#fff,stroke-width:2px
     classDef category fill:#16213e,stroke:#0f3460,color:#fff,stroke-width:2px
@@ -41,7 +33,7 @@ graph TD
 
     class arch root
     class core,sdk,tools,dx category
-    class core_f1,core_f2,sdk_f1,tools_f1,dx_f1 feature
+    class tools_f1 feature
 ```
 
 ## Spec Types
@@ -126,17 +118,15 @@ specs/
     spec.md
   005-dx/
     spec.md
-  006-feature-name/      ← 子仕様（Parent: 002-core）
+  006-ipc-bridge/        ← 子仕様（Parent: 004-tools）
     spec.md
     plan.md
     tasks.md
     research.md
+    data-model.md
+    quickstart.md
     contracts/
     checklists/
-  007-another-feature/   ← 子仕様（Parent: 003-sdk）
-    spec.md
-    plan.md
-    ...
 ```
 
 ## Spec Lifecycle
