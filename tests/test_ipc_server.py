@@ -315,6 +315,153 @@ class TestIPCServerMultipleRequests:
             await server.stop()
 
 
+class TestIPCServerPersistentConnection:
+    """IPCServer handles multiple requests on a single persistent connection.
+
+    This test class directly reproduces the bug described in Issue #134:
+    the server closes the connection after one request, but the client
+    expects to reuse the same connection for subsequent requests.
+    """
+
+    @pytest.mark.asyncio
+    async def test_multiple_requests_on_single_connection(self, tmp_path: Path) -> None:
+        """Multiple requests on a single persistent connection all succeed."""
+        socket_path = tmp_path / "test.sock"
+        call_count = 0
+
+        async def counting_handler(args: dict[str, object]) -> dict[str, object]:
+            nonlocal call_count
+            call_count += 1
+            return {"content": [{"type": "text", "text": f"call_{call_count}"}]}
+
+        server = IPCServer(str(socket_path), {"counter": counting_handler})
+
+        await server.start()
+        try:
+            # Open a SINGLE connection and send multiple requests
+            reader, writer = await asyncio.open_unix_connection(str(socket_path))
+            try:
+                for i in range(3):
+                    request = {
+                        "method": "call_tool",
+                        "params": {"name": "counter", "arguments": {}},
+                    }
+                    payload = json.dumps(request).encode("utf-8")
+                    prefix = struct.pack("!I", len(payload))
+                    writer.write(prefix + payload)
+                    await writer.drain()
+
+                    resp_prefix = await reader.readexactly(4)
+                    (resp_length,) = struct.unpack("!I", resp_prefix)
+                    resp_payload = await reader.readexactly(resp_length)
+                    response = json.loads(resp_payload.decode("utf-8"))
+                    result = _result(response)
+                    assert result["content"][0]["text"] == f"call_{i + 1}"  # type: ignore[index]
+
+                assert call_count == 3
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_different_tools_on_single_connection(self, tmp_path: Path) -> None:
+        """Different tools can be called on a single persistent connection."""
+        socket_path = tmp_path / "test.sock"
+        mock_a = _mock_handler(
+            return_value={"content": [{"type": "text", "text": "result_a"}]}
+        )
+        mock_b = _mock_handler(
+            return_value={"content": [{"type": "text", "text": "result_b"}]}
+        )
+        server = IPCServer(
+            str(socket_path), _handlers(("tool_a", mock_a), ("tool_b", mock_b))
+        )
+
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(socket_path))
+            try:
+                # First request: tool_a
+                req1 = {
+                    "method": "call_tool",
+                    "params": {"name": "tool_a", "arguments": {"x": 1}},
+                }
+                payload1 = json.dumps(req1).encode("utf-8")
+                writer.write(struct.pack("!I", len(payload1)) + payload1)
+                await writer.drain()
+
+                prefix1 = await reader.readexactly(4)
+                (length1,) = struct.unpack("!I", prefix1)
+                resp1 = json.loads((await reader.readexactly(length1)).decode("utf-8"))
+                assert _result(resp1)["content"][0]["text"] == "result_a"  # type: ignore[index]
+
+                # Second request: tool_b
+                req2 = {
+                    "method": "call_tool",
+                    "params": {"name": "tool_b", "arguments": {"y": 2}},
+                }
+                payload2 = json.dumps(req2).encode("utf-8")
+                writer.write(struct.pack("!I", len(payload2)) + payload2)
+                await writer.drain()
+
+                prefix2 = await reader.readexactly(4)
+                (length2,) = struct.unpack("!I", prefix2)
+                resp2 = json.loads((await reader.readexactly(length2)).decode("utf-8"))
+                assert _result(resp2)["content"][0]["text"] == "result_b"  # type: ignore[index]
+
+                mock_a.assert_called_once_with({"x": 1})
+                mock_b.assert_called_once_with({"y": 2})
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_server_handles_client_disconnect_gracefully(
+        self, tmp_path: Path
+    ) -> None:
+        """Server handles client disconnect without error (graceful EOF)."""
+        socket_path = tmp_path / "test.sock"
+        mock = _mock_handler(return_value={"content": [{"type": "text", "text": "ok"}]})
+        server = IPCServer(str(socket_path), _handlers(("tool", mock)))
+
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(socket_path))
+            # Send one request, get response
+            request = {
+                "method": "call_tool",
+                "params": {"name": "tool", "arguments": {}},
+            }
+            payload = json.dumps(request).encode("utf-8")
+            writer.write(struct.pack("!I", len(payload)) + payload)
+            await writer.drain()
+
+            prefix = await reader.readexactly(4)
+            (length,) = struct.unpack("!I", prefix)
+            await reader.readexactly(length)
+
+            # Close the connection (client disconnect)
+            writer.close()
+            await writer.wait_closed()
+
+            # Give server a moment to process the disconnect
+            await asyncio.sleep(0.05)
+
+            # Server should still be running and accept new connections
+            r = await _send_ipc_request(
+                str(socket_path),
+                "call_tool",
+                {"name": "tool", "arguments": {}},
+            )
+            assert "result" in r
+        finally:
+            await server.stop()
+
+
 # ── T013: IPCSession Tests ───────────────────────────────────────────────
 
 
