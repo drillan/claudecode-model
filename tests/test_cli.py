@@ -510,7 +510,6 @@ class TestClaudeCodeCLIExecute:
         cli = ClaudeCodeCLI()
 
         mock_process = MagicMock()
-        mock_process.terminate = MagicMock()
         mock_process.kill = MagicMock()
         mock_process.wait = AsyncMock()
         mock_process.communicate = AsyncMock(side_effect=asyncio.CancelledError())
