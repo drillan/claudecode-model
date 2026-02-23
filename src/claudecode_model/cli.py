@@ -254,8 +254,7 @@ class ClaudeCodeCLI:
                 raise CLIInterruptedError("Execution interrupted by user")
         except asyncio.CancelledError:
             if process is not None:
-                process.kill()
-                await process.wait()
+                await self._terminate_process_gracefully(process)
             raise
         except FileNotFoundError as e:
             raise CLINotFoundError(

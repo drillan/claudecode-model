@@ -505,11 +505,12 @@ class TestClaudeCodeCLIExecute:
             assert exc_info.value.recoverable is False
 
     @pytest.mark.asyncio
-    async def test_cancelled_error_cleanup(self) -> None:
-        """execute should cleanup on CancelledError."""
+    async def test_cancelled_error_uses_graceful_termination(self) -> None:
+        """execute should use graceful termination on CancelledError."""
         cli = ClaudeCodeCLI()
 
         mock_process = MagicMock()
+        mock_process.terminate = MagicMock()
         mock_process.kill = MagicMock()
         mock_process.wait = AsyncMock()
         mock_process.communicate = AsyncMock(side_effect=asyncio.CancelledError())
@@ -520,10 +521,16 @@ class TestClaudeCodeCLIExecute:
                 "asyncio.create_subprocess_exec",
                 return_value=mock_process,
             ),
+            patch.object(
+                cli,
+                "_terminate_process_gracefully",
+                new_callable=AsyncMock,
+            ) as mock_graceful,
         ):
             with pytest.raises(asyncio.CancelledError):
                 await cli.execute("Hello")
-            mock_process.kill.assert_called_once()
+            mock_graceful.assert_called_once_with(mock_process)
+            mock_process.kill.assert_not_called()
 
 
 class TestClaudeCodeCLIJsonSchema:

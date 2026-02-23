@@ -236,16 +236,17 @@ print(f"Output tokens: {result.cli_response.usage.output_tokens}")
 
 ## Graceful Exit and Interrupt Handling
 
-claudecode-model handles `KeyboardInterrupt` (Ctrl-C) gracefully, ensuring subprocesses are properly terminated and resources are cleaned up.
+claudecode-model handles `KeyboardInterrupt` (Ctrl-C) and `asyncio.CancelledError` (task cancellation) gracefully, ensuring subprocesses are properly terminated and resources are cleaned up.
 
 ### Default Behavior
 
-When a `KeyboardInterrupt` occurs during execution:
+When a `KeyboardInterrupt` or `asyncio.CancelledError` occurs during execution:
 
 1. **SIGTERM** is sent to the subprocess for graceful shutdown
 2. Waits up to 5 seconds for the process to exit
 3. If still running, **SIGKILL** is sent to force termination
-4. A `CLIInterruptedError` is raised with any partial results
+4. For `KeyboardInterrupt`: a `CLIInterruptedError` is raised
+5. For `asyncio.CancelledError`: the exception is re-raised for proper cancellation propagation
 
 ```python
 from claudecode_model import ClaudeCodeModel, CLIInterruptedError
