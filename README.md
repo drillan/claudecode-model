@@ -191,6 +191,7 @@ print(ctx.deps["api_key"])  # "secret"
 | `permission_mode` | `str \| None` | `None` | Permission mode (e.g., "bypassPermissions") |
 | `max_turns` | `int \| None` | `None` | Maximum conversation turns |
 | `interrupt_handler` | `Callable[[], bool] \| None` | `None` | Callback for Ctrl-C confirmation |
+| `tool_parameter_restrictions` | `dict[str, dict[str, bool]] \| None` | `None` | Per-tool parameter restrictions (see [Tool Parameter Restrictions](#tool-parameter-restrictions)) |
 
 ### Model Settings
 
@@ -277,6 +278,50 @@ The `interrupt_handler` callback:
 - Takes no arguments
 - Returns `bool`: `True` to proceed with termination, `False` to continue
 - Is called on the first Ctrl-C; a second Ctrl-C always forces immediate termination
+
+## Tool Parameter Restrictions
+
+Enforce parameter-level constraints on built-in tools via the SDK's `can_use_tool` callback. Unlike system prompt instructions (which the agent may ignore), these restrictions are enforced at the code level before tool execution.
+
+### Restricting Bash `run_in_background`
+
+```python
+from pydantic_ai import Agent
+from claudecode_model import ClaudeCodeModel
+
+model = ClaudeCodeModel(
+    tool_parameter_restrictions={
+        "Bash": {"run_in_background": False},
+    }
+)
+agent = Agent(model, system_prompt="You are a helpful assistant.")
+
+# If the agent tries to call Bash with run_in_background=True,
+# the SDK denies the call and returns an error to the agent.
+result = agent.run_sync("Run a long task")
+```
+
+### Multiple Restrictions
+
+```python
+model = ClaudeCodeModel(
+    tool_parameter_restrictions={
+        "Bash": {
+            "run_in_background": False,
+            "dangerouslyDisableSandbox": False,
+        },
+    }
+)
+```
+
+### How It Works
+
+1. `tool_parameter_restrictions` maps tool names to parameter constraints
+2. On each tool call, the SDK invokes a `can_use_tool` callback before execution
+3. If the tool call violates a restriction (e.g., `run_in_background=True` when restricted to `False`), the call is denied with `PermissionResultDeny`
+4. The agent receives the denial message and adjusts its behavior (e.g., re-runs without the restricted parameter)
+
+Parameters not present in the tool call are not checked — only explicit violations are denied.
 
 ## Limitations and Notes
 
