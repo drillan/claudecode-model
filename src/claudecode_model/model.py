@@ -13,9 +13,13 @@ import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from claude_agent_sdk.types import (
     AssistantMessage,
+    CanUseTool,
     McpSdkServerConfig,
     McpStdioServerConfig,
     Message,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ToolPermissionContext,
     ToolUseBlock,
 )
 from pydantic_ai.messages import (
@@ -121,6 +125,7 @@ class ClaudeCodeModel(Model):
         message_callback: MessageCallbackType | None = None,
         continue_conversation: bool = False,
         interrupt_handler: Callable[[], bool] | None = None,
+        tool_parameter_restrictions: dict[str, dict[str, bool]] | None = None,
     ) -> None:
         """Initialize ClaudeCodeModel.
 
@@ -139,6 +144,10 @@ class ClaudeCodeModel(Model):
             interrupt_handler: Callback invoked on Ctrl-C (KeyboardInterrupt).
                 Returns True to proceed with termination, False to continue.
                 If None, interrupts immediately terminate execution.
+            tool_parameter_restrictions: Per-tool parameter restrictions enforced
+                via the SDK's can_use_tool callback. Maps tool names to parameter
+                constraints. Example: {"Bash": {"run_in_background": False}} blocks
+                Bash tool calls with run_in_background=True.
         """
         self._model_name = model_name
         self._working_directory = working_directory
@@ -150,6 +159,7 @@ class ClaudeCodeModel(Model):
         self._message_callback = message_callback
         self._continue_conversation = continue_conversation
         self._interrupt_handler = interrupt_handler
+        self._tool_parameter_restrictions = tool_parameter_restrictions
         self._mcp_servers: dict[str, McpSdkServerConfig | McpStdioServerConfig] = {}
         self._agent_toolsets: Sequence[PydanticAITool] | AgentToolset | None = None
         self._tools_cache: dict[str, PydanticAITool] = {}
@@ -161,7 +171,8 @@ class ClaudeCodeModel(Model):
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
             "timeout=%s, allowed_tools=%s, disallowed_tools=%s, "
             "permission_mode=%s, max_turns=%s, has_message_callback=%s, "
-            "continue_conversation=%s, has_interrupt_handler=%s",
+            "continue_conversation=%s, has_interrupt_handler=%s, "
+            "tool_parameter_restrictions=%s",
             self._model_name,
             self._working_directory,
             self._timeout,
@@ -172,6 +183,7 @@ class ClaudeCodeModel(Model):
             self._message_callback is not None,
             self._continue_conversation,
             self._interrupt_handler is not None,
+            self._tool_parameter_restrictions,
         )
 
     @property
@@ -431,6 +443,48 @@ class ClaudeCodeModel(Model):
             resume=resume,
         )
 
+    def _build_can_use_tool(self) -> CanUseTool | None:
+        """Build a can_use_tool callback from tool_parameter_restrictions.
+
+        Returns:
+            An async callback that checks tool parameters against restrictions,
+            or None if no restrictions are configured.
+        """
+        restrictions = self._tool_parameter_restrictions
+        if not restrictions:
+            return None
+
+        async def check_tool_parameters(
+            tool_name: str,
+            tool_input: dict[str, object],
+            _context: ToolPermissionContext,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            tool_restrictions = restrictions.get(tool_name)
+            if tool_restrictions is None:
+                return PermissionResultAllow()
+
+            for param_name, required_value in tool_restrictions.items():
+                actual_value = tool_input.get(param_name)
+                if actual_value is not None and actual_value != required_value:
+                    logger.warning(
+                        "Tool parameter restriction violated: "
+                        "tool=%s, param=%s, actual=%r, required=%r",
+                        tool_name,
+                        param_name,
+                        actual_value,
+                        required_value,
+                    )
+                    return PermissionResultDeny(
+                        message=(
+                            f"Parameter '{param_name}' is restricted for tool '{tool_name}'. "
+                            f"Value {actual_value!r} is not allowed; "
+                            f"required value is {required_value!r}."
+                        ),
+                    )
+            return PermissionResultAllow()
+
+        return check_tool_parameters
+
     def _build_agent_options(
         self,
         system_prompt: str | None = None,
@@ -495,6 +549,7 @@ class ClaudeCodeModel(Model):
             mcp_servers=self._mcp_servers,  # type: ignore[arg-type]
             continue_conversation=continue_conversation,
             resume=resume,
+            can_use_tool=self._build_can_use_tool(),
         )
 
     async def _execute_sdk_query(
