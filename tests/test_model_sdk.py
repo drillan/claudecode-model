@@ -678,7 +678,7 @@ class TestClaudeCodeModelTimeoutCleanup:
     async def test_execute_sdk_query_timeout_aclose_raises_exception(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """_execute_sdk_query should log warning when aclose() raises exception."""
+        """_execute_sdk_query should log error when aclose() raises RuntimeError."""
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
@@ -700,7 +700,7 @@ class TestClaudeCodeModelTimeoutCleanup:
 
         import logging
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.ERROR):
             with patch("claudecode_model.model.query", mock_query):
                 with pytest.raises(CLIExecutionError) as exc_info:
                     await model._execute_sdk_query("Test prompt", options, timeout=0.1)
@@ -708,9 +708,9 @@ class TestClaudeCodeModelTimeoutCleanup:
         assert "timed out" in str(exc_info.value).lower()
         assert exc_info.value.error_type == "timeout"
         assert any(
-            "Failed to close query generator" in record.message
+            "RuntimeError during query generator cleanup" in record.message
             for record in caplog.records
-        ), "Should log warning when aclose() fails"
+        ), "Should log error when aclose() raises RuntimeError"
 
     @pytest.mark.asyncio
     async def test_execute_sdk_query_timeout_aclose_timeout(

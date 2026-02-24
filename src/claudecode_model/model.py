@@ -719,11 +719,17 @@ class ClaudeCodeModel(Model):
         self,
         query_generator: AsyncIterator[Message] | None,
     ) -> None:
-        """Close async generator with shielded cancel scope, swallowing errors.
+        """Close async generator, logging and suppressing expected errors.
 
         Ensures the generator is closed to prevent 'Task exception was never
         retrieved' warnings that occur when GC closes the generator in a
         background task where CancelScope errors cannot be caught.
+
+        Shield protects cleanup from external cancellation (e.g.,
+        caller-provided cancel scopes or framework-level timeouts) to allow
+        claude-agent-sdk's internal _tg.__aexit__() to complete properly.
+        Without shielding, outer scopes can cancel our cleanup, leaving
+        the scope tree inconsistent.
 
         Args:
             query_generator: The async generator to close, or None.
@@ -732,37 +738,43 @@ class ClaudeCodeModel(Model):
             return
         logger.debug(
             "Entering shielded cleanup for query generator "
-            "(cleanup_timeout=%s seconds)",
+            "(cleanup_timeout=%s seconds, generator_type=%s)",
             _CLEANUP_TIMEOUT_SECONDS,
+            type(query_generator).__qualname__,
         )
         with anyio.CancelScope(shield=True):
-            cleanup_scope = anyio.CancelScope(
-                deadline=anyio.current_time() + _CLEANUP_TIMEOUT_SECONDS
-            )
-            with cleanup_scope:
+            with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
                 try:
                     await query_generator.aclose()  # type: ignore[union-attr]
                 except RuntimeError as e:
                     if _is_cancel_scope_error(e):
                         logger.warning(
                             "Cancel scope conflict during generator "
-                            "cleanup (SDK task group issue): %s",
+                            "cleanup (SDK task group issue, "
+                            "generator_type=%s): %s",
+                            type(query_generator).__qualname__,
                             e,
                         )
                     else:
                         logger.error(
-                            "Failed to close query generator during cleanup",
+                            "RuntimeError during query generator cleanup "
+                            "(generator_type=%s)",
+                            type(query_generator).__qualname__,
                             exc_info=True,
                         )
-                except Exception:
+                except OSError:
                     logger.error(
-                        "Failed to close query generator during cleanup",
+                        "Failed to close query generator during cleanup "
+                        "(generator_type=%s)",
+                        type(query_generator).__qualname__,
                         exc_info=True,
                     )
             if cleanup_scope.cancelled_caught:
-                logger.warning(
-                    "Query generator cleanup timed out after %s seconds",
+                logger.error(
+                    "Query generator cleanup timed out after %s seconds "
+                    "(generator_type=%s)",
                     _CLEANUP_TIMEOUT_SECONDS,
+                    type(query_generator).__qualname__,
                 )
 
     async def _cleanup_query_generator_on_timeout(
@@ -770,10 +782,7 @@ class ClaudeCodeModel(Model):
         query_generator: AsyncIterator[Message] | None,
         timeout: float,
     ) -> NoReturn:
-        """Clean up async generator and raise timeout error.
-
-        Closes the async generator gracefully to ensure subprocess termination
-        when a timeout occurs. Logs warnings if cleanup fails or times out.
+        """Delegate generator cleanup to _cleanup_query_generator_safe, then raise timeout.
 
         Args:
             query_generator: The async generator to close, or None.
