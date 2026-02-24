@@ -14,6 +14,8 @@ import asyncio
 import json
 import logging
 import os
+import socket
+import stat
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
@@ -183,6 +185,30 @@ def _error_response(message: str, error_type: str) -> IPCErrorResponse:
     return {"error": {"message": message, "type": error_type}}
 
 
+def _is_socket_active(path: Path) -> bool:
+    """Check whether a Unix socket file is actively listening.
+
+    Attempts a non-blocking connect to distinguish active sockets (from
+    concurrent sessions) from stale files left by crashed processes.
+
+    Returns ``True`` if the socket accepts connections, ``False`` otherwise.
+    """
+    if not stat.S_ISSOCK(path.lstat().st_mode):
+        return False
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.setblocking(False)
+        sock.connect(str(path))
+        return True
+    except BlockingIOError:
+        # Non-blocking connect in progress — socket IS listening
+        return True
+    except (ConnectionRefusedError, FileNotFoundError, OSError):
+        return False
+    finally:
+        sock.close()
+
+
 # ── IPCSession ───────────────────────────────────────────────────────────
 
 
@@ -258,22 +284,26 @@ class IPCSession:
         """Remove stale socket files from previous sessions.
 
         Scans the temp directory for files matching the ``claudecode_ipc_*.sock``
-        pattern and removes any that do not belong to this session.
+        pattern and removes only those that are truly stale (not actively
+        listening).  Active sockets from concurrent sessions are preserved.
         """
         tmp_dir = Path(tempfile.gettempdir())
         pattern = f"{SOCKET_FILE_PREFIX}*{SOCKET_FILE_SUFFIX}"
         own_socket = Path(self._socket_path).name
 
-        for stale_path in tmp_dir.glob(pattern):
-            if stale_path.name == own_socket:
+        for candidate in tmp_dir.glob(pattern):
+            if candidate.name == own_socket:
+                continue
+            if _is_socket_active(candidate):
+                logger.debug("Skipping active socket: %s", candidate)
                 continue
             try:
-                stale_path.unlink()
-                logger.info("Removed stale socket file: %s", stale_path)
+                candidate.unlink()
+                logger.info("Removed stale socket file: %s", candidate)
             except OSError:
                 logger.warning(
                     "Failed to remove stale socket file: %s",
-                    stale_path,
+                    candidate,
                     exc_info=True,
                 )
 

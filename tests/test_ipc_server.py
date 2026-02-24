@@ -639,3 +639,119 @@ class TestIPCSessionSchemaFile:
         session = IPCSession(tool_handlers={}, tool_schemas=[])
         path = Path(session.schema_path)
         assert path.name.startswith(SCHEMA_FILE_PREFIX)
+
+
+# ── Stale Socket Cleanup Safety Tests ────────────────────────────────────
+
+
+class TestStaleSocketCleanupSafety:
+    """_cleanup_stale_sockets() must not delete active sockets from concurrent sessions."""
+
+    @pytest.mark.asyncio
+    async def test_active_socket_not_deleted_by_another_session(self) -> None:
+        """An actively listening socket from session A is not deleted when session B starts."""
+        schemas: list[ToolSchema] = [
+            {"name": "t1", "description": "d1", "input_schema": {}},
+        ]
+
+        async def dummy_handler(args: dict[str, object]) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        # Start session A — its socket is now actively listening
+        session_a = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+        await session_a.start()
+        try:
+            assert Path(session_a.socket_path).exists()
+
+            # Start session B — its _cleanup_stale_sockets must NOT remove A's socket
+            session_b = IPCSession(
+                tool_handlers={"t1": dummy_handler},
+                tool_schemas=schemas,
+            )
+            await session_b.start()
+            try:
+                # Session A's socket must still exist
+                assert Path(session_a.socket_path).exists(), (
+                    "Active socket from session A was deleted by session B's cleanup"
+                )
+                # Session B's socket must also exist
+                assert Path(session_b.socket_path).exists()
+            finally:
+                await session_b.stop()
+        finally:
+            await session_a.stop()
+
+    @pytest.mark.asyncio
+    async def test_truly_stale_socket_still_deleted(self) -> None:
+        """A non-listening socket file (stale) is still cleaned up."""
+        # Create a fake socket file that is NOT actively listening
+        stale_path = (
+            Path(tempfile.gettempdir())
+            / f"{SOCKET_FILE_PREFIX}stale_dead_session{SOCKET_FILE_SUFFIX}"
+        )
+        stale_path.touch()
+        assert stale_path.exists()
+
+        schemas: list[ToolSchema] = [
+            {"name": "t1", "description": "d1", "input_schema": {}},
+        ]
+
+        async def dummy_handler(args: dict[str, object]) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        session = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+        await session.start()
+        try:
+            # Stale (non-listening) socket should be removed
+            assert not stale_path.exists(), "Truly stale socket was not cleaned up"
+        finally:
+            await session.stop()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sessions_do_not_interfere(self) -> None:
+        """Two sessions started concurrently both remain functional."""
+        schemas: list[ToolSchema] = [
+            {"name": "t1", "description": "d1", "input_schema": {}},
+        ]
+
+        async def dummy_handler(args: dict[str, object]) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        session_a = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+        session_b = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+
+        await session_a.start()
+        await session_b.start()
+        try:
+            # Both sockets must exist
+            assert Path(session_a.socket_path).exists()
+            assert Path(session_b.socket_path).exists()
+
+            # Both sockets must be connectable
+            response_a = await _send_ipc_request(
+                session_a.socket_path,
+                "call_tool",
+                {"name": "t1", "arguments": {}},
+            )
+            response_b = await _send_ipc_request(
+                session_b.socket_path,
+                "call_tool",
+                {"name": "t1", "arguments": {}},
+            )
+            assert "result" in response_a
+            assert "result" in response_b
+        finally:
+            await session_a.stop()
+            await session_b.stop()
