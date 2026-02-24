@@ -629,22 +629,36 @@ class ClaudeCodeModel(Model):
                 captured_structured_output_input=captured_structured_output_input,
             )
 
-        # Use anyio.move_on_after for timeout handling
-        with anyio.move_on_after(timeout) as cancel_scope:
-            query_result = await run_query()
-            result = query_result.result_message
-            logger.debug(
-                "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
-                "is_error=%s, input_tokens=%d, output_tokens=%d, "
-                "has_captured_structured_output=%s",
-                result.num_turns,
-                result.duration_ms,
-                result.is_error,
-                result.usage.get("input_tokens", 0) if result.usage else 0,
-                result.usage.get("output_tokens", 0) if result.usage else 0,
-                query_result.captured_structured_output_input is not None,
+        # Use anyio.move_on_after for timeout handling.
+        # Wrapped in try/except RuntimeError to handle cancel scope tree
+        # corruption caused by claude-agent-sdk's manual task group
+        # __aenter__/__aexit__ when timeout cancellation interrupts
+        # _tg.__aexit__() completion (see Issue #142).
+        try:
+            with anyio.move_on_after(timeout) as cancel_scope:
+                query_result = await run_query()
+                result = query_result.result_message
+                logger.debug(
+                    "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
+                    "is_error=%s, input_tokens=%d, output_tokens=%d, "
+                    "has_captured_structured_output=%s",
+                    result.num_turns,
+                    result.duration_ms,
+                    result.is_error,
+                    result.usage.get("input_tokens", 0) if result.usage else 0,
+                    result.usage.get("output_tokens", 0) if result.usage else 0,
+                    query_result.captured_structured_output_input is not None,
+                )
+                return query_result
+        except RuntimeError as e:
+            if "cancel scope" not in str(e).lower():
+                raise
+            logger.warning(
+                "Cancel scope conflict during SDK query timeout "
+                "(SDK task group issue): %s",
+                e,
             )
-            return query_result
+            await self._cleanup_query_generator_on_timeout(query_generator, timeout)
 
         if cancel_scope.cancelled_caught:
             await self._cleanup_query_generator_on_timeout(query_generator, timeout)
@@ -676,19 +690,37 @@ class ClaudeCodeModel(Model):
             CLIExecutionError: Always raises with timeout error_type.
         """
         if query_generator is not None and hasattr(query_generator, "aclose"):
-            with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
-                try:
-                    await query_generator.aclose()  # type: ignore[union-attr]
-                except Exception:
+            # Shield cleanup from external cancellation (e.g., pydantic-graph's
+            # outer cancel scope) to allow claude-agent-sdk's internal
+            # _tg.__aexit__() to complete properly. Without shielding, the outer
+            # scope can cancel our cleanup, leaving the scope tree inconsistent.
+            with anyio.CancelScope(shield=True):
+                with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
+                    try:
+                        await query_generator.aclose()  # type: ignore[union-attr]
+                    except RuntimeError as e:
+                        if "cancel scope" in str(e).lower():
+                            logger.warning(
+                                "Cancel scope conflict during generator cleanup "
+                                "(SDK task group issue): %s",
+                                e,
+                            )
+                        else:
+                            logger.warning(
+                                "Failed to close query generator during "
+                                "timeout cleanup",
+                                exc_info=True,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Failed to close query generator during timeout cleanup",
+                            exc_info=True,
+                        )
+                if cleanup_scope.cancelled_caught:
                     logger.warning(
-                        "Failed to close query generator during timeout cleanup",
-                        exc_info=True,
+                        "Query generator cleanup timed out after %s seconds",
+                        _CLEANUP_TIMEOUT_SECONDS,
                     )
-            if cleanup_scope.cancelled_caught:
-                logger.warning(
-                    "Query generator cleanup timed out after %s seconds",
-                    _CLEANUP_TIMEOUT_SECONDS,
-                )
         raise CLIExecutionError(
             f"SDK query timed out after {timeout} seconds",
             exit_code=TIMEOUT_EXIT_CODE,
@@ -1265,28 +1297,42 @@ class ClaudeCodeModel(Model):
         # Start IPC server before streaming, stop in finally block
         await self._start_ipc_server()
         try:
-            # Stream messages with timeout handling and SDK exception conversion
+            # Stream messages with timeout handling and SDK exception conversion.
+            # Wrapped in try/except RuntimeError to handle cancel scope tree
+            # corruption (see Issue #142).
             query_generator: AsyncIterator[Message] | None = None
-            with anyio.move_on_after(settings.timeout) as cancel_scope:
-                try:
-                    query_generator = query(prompt=user_prompt, options=options)
-                    async for message in query_generator:
-                        if message is None:
-                            continue
-                        yield message
-                except Exception as e:
-                    raise CLIExecutionError(
-                        f"SDK query failed: {e}",
-                        exit_code=None,
-                        stderr=str(e),
-                        error_type="unknown",
-                        recoverable=False,
-                    ) from e
-
-            if cancel_scope.cancelled_caught:
+            try:
+                with anyio.move_on_after(settings.timeout) as cancel_scope:
+                    try:
+                        query_generator = query(prompt=user_prompt, options=options)
+                        async for message in query_generator:
+                            if message is None:
+                                continue
+                            yield message
+                    except Exception as e:
+                        raise CLIExecutionError(
+                            f"SDK query failed: {e}",
+                            exit_code=None,
+                            stderr=str(e),
+                            error_type="unknown",
+                            recoverable=False,
+                        ) from e
+            except RuntimeError as e:
+                if "cancel scope" not in str(e).lower():
+                    raise
+                logger.warning(
+                    "Cancel scope conflict during stream_messages timeout "
+                    "(SDK task group issue): %s",
+                    e,
+                )
                 await self._cleanup_query_generator_on_timeout(
                     query_generator, settings.timeout
                 )
+            else:
+                if cancel_scope.cancelled_caught:
+                    await self._cleanup_query_generator_on_timeout(
+                        query_generator, settings.timeout
+                    )
         finally:
             await self._stop_ipc_server()
 
