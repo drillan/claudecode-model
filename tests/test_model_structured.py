@@ -1804,3 +1804,218 @@ class TestErrorDuringExecutionRecovery:
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(CLIExecutionError):
                 await model.request(messages, None, params)
+
+
+class TestResultMessageLoopTermination:
+    """Tests for run_query() loop termination on ResultMessage.
+
+    Issue #138: The async for loop in run_query() did not break after
+    receiving ResultMessage, causing the generator to block until fully
+    exhausted. This could cause:
+    - Delayed return when the generator yields messages after ResultMessage
+    - Overwrite of a successful ResultMessage by a subsequent error ResultMessage
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_result_message_is_used_when_multiple_yielded(
+        self,
+    ) -> None:
+        """Should use the first ResultMessage and ignore subsequent ones.
+
+        When the query generator yields a success ResultMessage followed by
+        an error ResultMessage, the first (success) one should be used.
+        """
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        success_result = create_mock_result_message(
+            result="success output",
+            subtype="success",
+            structured_output=None,
+        )
+        error_result = create_mock_result_message(
+            result="error output",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield success_result
+            yield error_result  # Should be ignored
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+            content = response.parts[0].content  # type: ignore[union-attr]
+            assert content == "success output"
+
+    @pytest.mark.asyncio
+    async def test_structured_output_preserved_when_error_result_follows(
+        self,
+    ) -> None:
+        """Should preserve structured_output from first ResultMessage.
+
+        When the first ResultMessage has structured_output and a second
+        ResultMessage has subtype=error_max_turns without structured_output,
+        the first one's structured_output should be used.
+        """
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        success_result = create_mock_result_message(
+            result="Generated output",
+            subtype="success",
+            structured_output={"name": "preserved"},
+        )
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield success_result
+            yield error_result  # Should be ignored
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "preserved"}
+
+    @pytest.mark.asyncio
+    async def test_captured_tool_input_before_result_message_is_retained(
+        self,
+    ) -> None:
+        """Should capture StructuredOutput ToolUseBlock input before ResultMessage.
+
+        The AssistantMessage with StructuredOutput ToolUseBlock appears before
+        the ResultMessage. Breaking on ResultMessage should not lose the
+        captured tool input for recovery purposes.
+        """
+        from claude_agent_sdk.types import AssistantMessage as SdkAssistantMessage
+        from claude_agent_sdk.types import ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        json_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        assistant_msg = SdkAssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-1",
+                    name="StructuredOutput",
+                    input={"parameters": {"name": "from-tool-block"}},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_max_turns",
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "from-tool-block"}
+
+    @pytest.mark.asyncio
+    async def test_messages_after_result_message_are_not_processed(
+        self,
+    ) -> None:
+        """Should not invoke callback for messages after ResultMessage.
+
+        When the loop breaks on ResultMessage, subsequent AssistantMessages
+        should not trigger the message callback.
+        """
+        from claude_agent_sdk.types import AssistantMessage as SdkAssistantMessage
+        from claude_agent_sdk.types import TextBlock
+
+        callback_messages: list[object] = []
+
+        model = ClaudeCodeModel(
+            message_callback=lambda msg: callback_messages.append(msg)
+        )
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+
+        pre_result_msg = SdkAssistantMessage(
+            content=[TextBlock(text="before result")],
+            model="claude-sonnet-4-20250514",
+        )
+        result_msg = create_mock_result_message(result="done")
+        post_result_msg = SdkAssistantMessage(
+            content=[TextBlock(text="after result")],
+            model="claude-sonnet-4-20250514",
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield pre_result_msg  # type: ignore[misc]
+            yield result_msg
+            yield post_result_msg  # type: ignore[misc]
+
+        with patch("claudecode_model.model.query", mock_query):
+            await model.request(messages, None, params)
+
+        # Only the pre-result message should have triggered the callback
+        assert len(callback_messages) == 1
+        assert isinstance(callback_messages[0], SdkAssistantMessage)

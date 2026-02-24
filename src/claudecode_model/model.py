@@ -538,6 +538,7 @@ class ClaudeCodeModel(Model):
                         continue
                     if isinstance(message, ResultMessage):
                         result_message = message
+                        break
                     else:
                         # Capture StructuredOutput tool input from AssistantMessage.
                         # Note: If multiple StructuredOutput blocks exist, only the
