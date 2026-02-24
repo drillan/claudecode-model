@@ -908,3 +908,55 @@ class TestCleanupLoopResilience:
             if stale_a.exists():
                 stale_a.unlink()
             await session.stop()
+
+
+# ── Client Disconnect IPCError Handling Tests ─────────────────────────────
+
+
+class TestClientDisconnectIPCError:
+    """Client disconnect that raises IPCError must be handled as normal EOF, not logged as error."""
+
+    @pytest.mark.asyncio
+    async def test_abrupt_disconnect_no_error_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Abrupt client disconnect (0 bytes EOF) must not produce 'Error handling IPC connection' log.
+
+        Regression test: receive_message wraps asyncio.IncompleteReadError as IPCError,
+        but _handle_connection must catch IPCError as a normal disconnect signal.
+        """
+        socket_path = tmp_path / "test.sock"
+        mock = _mock_handler(return_value={"content": [{"type": "text", "text": "ok"}]})
+        server = IPCServer(str(socket_path), _handlers(("tool", mock)))
+
+        await server.start()
+        try:
+            # Connect and immediately close without sending any data (EOF)
+            _reader, writer = await asyncio.open_unix_connection(str(socket_path))
+            writer.close()
+            await writer.wait_closed()
+
+            # Give server time to process the disconnect
+            await asyncio.sleep(0.05)
+
+            # Verify no error was logged for the disconnect
+            error_records = [
+                r
+                for r in caplog.records
+                if r.levelname == "ERROR"
+                and "Error handling IPC connection" in r.message
+            ]
+            assert error_records == [], (
+                "Abrupt client disconnect was logged as error instead of "
+                "being handled as normal EOF"
+            )
+
+            # Server must still be functional
+            r = await _send_ipc_request(
+                str(socket_path),
+                "call_tool",
+                {"name": "tool", "arguments": {}},
+            )
+            assert "result" in r
+        finally:
+            await server.stop()

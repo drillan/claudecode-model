@@ -21,6 +21,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from claudecode_model.exceptions import IPCError
 from claudecode_model.ipc.protocol import (
     SCHEMA_FILE_PREFIX,
     SOCKET_FILE_PREFIX,
@@ -104,7 +105,7 @@ class IPCServer:
             while True:
                 try:
                     raw_request = await receive_message(reader)
-                except (asyncio.IncompleteReadError, ConnectionError):
+                except (asyncio.IncompleteReadError, ConnectionError, IPCError):
                     break  # Client disconnected
                 try:
                     response = await self._dispatch(raw_request)
