@@ -268,6 +268,7 @@ class TestExecuteSdkQueryCancelScopeHandling:
 
             def __init__(self) -> None:
                 self._yielded = False
+                self.aclose_called = False
 
             def __aiter__(self) -> "SuccessfulGenerator":
                 return self
@@ -279,10 +280,12 @@ class TestExecuteSdkQueryCancelScopeHandling:
                 return mock_result
 
             async def aclose(self) -> None:
-                pass
+                self.aclose_called = True
+
+        gen_instance = SuccessfulGenerator()
 
         def mock_query(**kwargs: object) -> SuccessfulGenerator:
-            return SuccessfulGenerator()
+            return gen_instance
 
         with caplog.at_level(logging.WARNING):
             with (
@@ -298,9 +301,68 @@ class TestExecuteSdkQueryCancelScopeHandling:
 
         assert query_result.result_message is mock_result
         assert query_result.captured_structured_output_input is None
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called to prevent "
+            "'Task exception was never retrieved' errors"
+        )
         assert any(
             "result preserved" in record.message.lower() for record in caplog.records
         ), "Should log warning that result was preserved despite cancel scope conflict"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_successful_query_cleans_up_with_scope_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Generator cleanup should handle CancelScope error during aclose().
+
+        When the preserved result is returned, query_generator.aclose() is called.
+        If aclose() itself raises a CancelScope RuntimeError (because
+        process_query's finally block calls query.close() which fails),
+        it should be caught and logged, not propagated.
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        mock_result = create_mock_result_message(result="Success from SDK")
+
+        class GeneratorWithScopeErrorOnClose:
+            def __init__(self) -> None:
+                self._yielded = False
+                self.aclose_called = False
+
+            def __aiter__(self) -> "GeneratorWithScopeErrorOnClose":
+                return self
+
+            async def __anext__(self) -> ResultMessage:
+                if self._yielded:
+                    raise StopAsyncIteration
+                self._yielded = True
+                return mock_result
+
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise RuntimeError(_CANCEL_SCOPE_ERROR_MSG)
+
+        gen_instance = GeneratorWithScopeErrorOnClose()
+
+        def mock_query(**kwargs: object) -> GeneratorWithScopeErrorOnClose:
+            return gen_instance
+
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _mock_move_on_after_with_error,
+                ),
+            ):
+                query_result = await model._execute_sdk_query(
+                    "Test prompt", options, timeout=60.0
+                )
+
+        assert query_result.result_message is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called even if it raises"
+        )
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_successful_query_with_structured_output(
@@ -470,6 +532,7 @@ class TestStreamMessagesCancelScopeHandling:
             def __init__(self) -> None:
                 self._messages: list[ResultMessage] = [mock_result]
                 self._index = 0
+                self.aclose_called = False
 
             def __aiter__(self) -> "CompletedStreamGenerator":
                 return self
@@ -482,10 +545,12 @@ class TestStreamMessagesCancelScopeHandling:
                 return msg
 
             async def aclose(self) -> None:
-                pass
+                self.aclose_called = True
+
+        gen_instance = CompletedStreamGenerator()
 
         def mock_query(**kwargs: object) -> CompletedStreamGenerator:
-            return CompletedStreamGenerator()
+            return gen_instance
 
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -514,9 +579,83 @@ class TestStreamMessagesCancelScopeHandling:
 
         assert len(collected) == 1
         assert collected[0] is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called to prevent "
+            "'Task exception was never retrieved' errors"
+        )
         assert any(
             "results preserved" in record.message.lower() for record in caplog.records
         ), "Should log warning that stream results were preserved"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_complete_stream_cleans_up_with_scope_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Stream generator cleanup should handle CancelScope error during aclose().
+
+        When stream completes and result is preserved, query_generator.aclose()
+        is called. If aclose() itself raises a CancelScope RuntimeError
+        (process_query's finally calls query.close() which fails),
+        it should be caught and logged, not propagated.
+        """
+        model = ClaudeCodeModel()
+        mock_result = create_mock_result_message(result="Streamed success")
+
+        class StreamGeneratorWithScopeErrorOnClose:
+            def __init__(self) -> None:
+                self._messages: list[ResultMessage] = [mock_result]
+                self._index = 0
+                self.aclose_called = False
+
+            def __aiter__(self) -> "StreamGeneratorWithScopeErrorOnClose":
+                return self
+
+            async def __anext__(self) -> ResultMessage:
+                if self._index >= len(self._messages):
+                    raise StopAsyncIteration
+                msg = self._messages[self._index]
+                self._index += 1
+                return msg
+
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise RuntimeError(_CANCEL_SCOPE_ERROR_MSG)
+
+        gen_instance = StreamGeneratorWithScopeErrorOnClose()
+
+        def mock_query(**kwargs: object) -> StreamGeneratorWithScopeErrorOnClose:
+            return gen_instance
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 60.0}
+
+        collected: list[Message] = []
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _mock_move_on_after_with_error,
+                ),
+            ):
+                async for message in model.stream_messages(
+                    messages,
+                    settings,
+                    params,
+                ):
+                    collected.append(message)
+
+        assert len(collected) == 1
+        assert collected[0] is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called even if it raises"
+        )
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_multi_message_stream(self) -> None:
