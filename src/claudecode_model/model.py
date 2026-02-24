@@ -109,6 +109,15 @@ _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES: frozenset[str] = frozenset(
 _CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
+# Known anyio CancelScope RuntimeError message patterns (anyio 4.x asyncio backend).
+# These are the exact prefixes from anyio/_backends/_asyncio.py CancelScope.__exit__().
+_CANCEL_SCOPE_ERROR_PATTERNS: tuple[str, ...] = (
+    "attempted to exit a cancel scope that isn't the current tasks's current cancel scope",
+    "attempted to exit cancel scope in a different task",
+    "this cancel scope is not active",
+)
+
+
 def _is_cancel_scope_error(error: RuntimeError) -> bool:
     """Check if a RuntimeError is caused by anyio cancel scope tree corruption.
 
@@ -118,10 +127,15 @@ def _is_cancel_scope_error(error: RuntimeError) -> bool:
     scope stack. This causes anyio to raise RuntimeError when the outer scope
     (e.g., move_on_after) tries to exit and finds a stale scope still current.
 
+    Matches against known anyio CancelScope error message prefixes rather than
+    a broad substring to avoid false positives that could silently suppress
+    unrelated RuntimeErrors (see Issue #144 review).
+
     Note: This relies on anyio's internal error message format, which may
     change across versions. Tested with anyio 4.x.
     """
-    return "cancel scope" in str(error).lower()
+    msg = str(error).lower()
+    return any(msg.startswith(pattern) for pattern in _CANCEL_SCOPE_ERROR_PATTERNS)
 
 
 class ClaudeCodeModel(Model):
@@ -682,14 +696,17 @@ class ClaudeCodeModel(Model):
             if query_result is not None:
                 logger.warning(
                     "Cancel scope conflict after successful SDK query "
-                    "(SDK task group issue, result preserved): %s",
+                    "(SDK task group issue, result preserved): %s "
+                    "(timeout=%.1fs)",
                     e,
+                    timeout,
                 )
                 return query_result
             logger.warning(
                 "Cancel scope conflict during SDK query timeout "
-                "(SDK task group issue): %s",
+                "(SDK task group issue): %s (timeout=%.1fs)",
                 e,
+                timeout,
             )
             await self._cleanup_query_generator_on_timeout(query_generator, timeout)
         else:
@@ -1370,14 +1387,17 @@ class ClaudeCodeModel(Model):
                 if stream_completed:
                     logger.warning(
                         "Cancel scope conflict after completed stream "
-                        "(SDK task group issue, results preserved): %s",
+                        "(SDK task group issue, results preserved): %s "
+                        "(timeout=%.1fs)",
                         e,
+                        settings.timeout,
                     )
                     return
                 logger.warning(
                     "Cancel scope conflict during stream_messages timeout "
-                    "(SDK task group issue): %s",
+                    "(SDK task group issue): %s (timeout=%.1fs)",
                     e,
+                    settings.timeout,
                 )
                 await self._cleanup_query_generator_on_timeout(
                     query_generator, settings.timeout

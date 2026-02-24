@@ -250,7 +250,7 @@ class TestExecuteSdkQueryCancelScopeHandling:
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_successful_query_returns_result(
-        self,
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CancelScope RuntimeError after successful query should return result.
 
@@ -284,6 +284,75 @@ class TestExecuteSdkQueryCancelScopeHandling:
         def mock_query(**kwargs: object) -> SuccessfulGenerator:
             return SuccessfulGenerator()
 
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _mock_move_on_after_with_error,
+                ),
+            ):
+                query_result = await model._execute_sdk_query(
+                    "Test prompt", options, timeout=60.0
+                )
+
+        assert query_result.result_message is mock_result
+        assert query_result.captured_structured_output_input is None
+        assert any(
+            "result preserved" in record.message.lower() for record in caplog.records
+        ), "Should log warning that result was preserved despite cancel scope conflict"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_successful_query_with_structured_output(
+        self,
+    ) -> None:
+        """Preserved result should include captured_structured_output_input.
+
+        When the query includes StructuredOutput tool use and CancelScope
+        RuntimeError occurs after completion, the captured structured output
+        input must also be preserved (Issue #144).
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        mock_result = create_mock_result_message(result="Structured result")
+        structured_input: dict[str, object] = {"key": "value", "nested": {"a": 1}}
+
+        class StructuredOutputGenerator:
+            """Generator that yields AssistantMessage with StructuredOutput then ResultMessage."""
+
+            def __init__(self) -> None:
+                self._phase = 0
+
+            def __aiter__(self) -> "StructuredOutputGenerator":
+                return self
+
+            async def __anext__(self) -> Message:
+                if self._phase == 0:
+                    # Yield AssistantMessage with StructuredOutput tool use
+                    from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+                    self._phase = 1
+                    return AssistantMessage(
+                        model="claude-sonnet-4-20250514",
+                        content=[
+                            ToolUseBlock(
+                                id="tool-1",
+                                name="StructuredOutput",
+                                input=structured_input,
+                            )
+                        ],
+                    )
+                elif self._phase == 1:
+                    self._phase = 2
+                    return mock_result
+                raise StopAsyncIteration
+
+            async def aclose(self) -> None:
+                pass
+
+        def mock_query(**kwargs: object) -> StructuredOutputGenerator:
+            return StructuredOutputGenerator()
+
         with (
             patch("claudecode_model.model.query", mock_query),
             patch(
@@ -296,7 +365,7 @@ class TestExecuteSdkQueryCancelScopeHandling:
             )
 
         assert query_result.result_message is mock_result
-        assert query_result.captured_structured_output_input is None
+        assert query_result.captured_structured_output_input == structured_input
 
 
 class TestStreamMessagesCancelScopeHandling:
@@ -383,7 +452,7 @@ class TestStreamMessagesCancelScopeHandling:
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_complete_stream_returns_normally(
-        self,
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """CancelScope RuntimeError after completed stream should not raise timeout.
 
@@ -428,6 +497,72 @@ class TestStreamMessagesCancelScopeHandling:
         settings: ClaudeCodeModelSettings = {"timeout": 60.0}
 
         collected: list[Message] = []
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _mock_move_on_after_with_error,
+                ),
+            ):
+                async for message in model.stream_messages(
+                    messages,
+                    settings,
+                    params,
+                ):
+                    collected.append(message)
+
+        assert len(collected) == 1
+        assert collected[0] is mock_result
+        assert any(
+            "results preserved" in record.message.lower() for record in caplog.records
+        ), "Should log warning that stream results were preserved"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_multi_message_stream(self) -> None:
+        """Multiple messages should all be preserved when CancelScope error occurs after stream completion."""
+        model = ClaudeCodeModel()
+        from claude_agent_sdk.types import AssistantMessage, TextBlock
+
+        mock_assistant = AssistantMessage(
+            model="claude-sonnet-4-20250514",
+            content=[TextBlock(text="Thinking...")],
+        )
+        mock_result = create_mock_result_message(result="Final answer")
+
+        class MultiMessageGenerator:
+            """Generator that yields multiple messages then completes."""
+
+            def __init__(self) -> None:
+                self._messages: list[Message] = [mock_assistant, mock_result]
+                self._index = 0
+
+            def __aiter__(self) -> "MultiMessageGenerator":
+                return self
+
+            async def __anext__(self) -> Message:
+                if self._index >= len(self._messages):
+                    raise StopAsyncIteration
+                msg = self._messages[self._index]
+                self._index += 1
+                return msg
+
+            async def aclose(self) -> None:
+                pass
+
+        def mock_query(**kwargs: object) -> MultiMessageGenerator:
+            return MultiMessageGenerator()
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 60.0}
+
+        collected: list[Message] = []
         with (
             patch("claudecode_model.model.query", mock_query),
             patch(
@@ -442,8 +577,9 @@ class TestStreamMessagesCancelScopeHandling:
             ):
                 collected.append(message)
 
-        assert len(collected) == 1
-        assert collected[0] is mock_result
+        assert len(collected) == 2
+        assert collected[0] is mock_assistant
+        assert collected[1] is mock_result
 
 
 class TestCleanupTimeoutConstants:
