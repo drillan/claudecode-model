@@ -133,7 +133,7 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
 
         gen = OtherRuntimeErrorGenerator()
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.ERROR):
             with pytest.raises(CLIExecutionError) as exc_info:
                 await model._cleanup_query_generator_on_timeout(
                     gen._as_message_iterator(), timeout=5.0
@@ -145,7 +145,7 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
         assert any(
             "failed to close query generator" in record.message.lower()
             for record in caplog.records
-        ), "Should log warning about failed generator close"
+        ), "Should log error about failed generator close"
 
 
 class TestExecuteSdkQueryCancelScopeHandling:
