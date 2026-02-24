@@ -55,8 +55,34 @@ class _CancelScopeErrorOnExit:
 
 
 def _mock_move_on_after_with_error(delay: float) -> _CancelScopeErrorOnExit:
-    """Factory that returns a context manager raising RuntimeError on exit."""
+    """Factory that returns a context manager raising RuntimeError on exit.
+
+    Always raises on every call. Use _MockMoveOnAfterFirstCallError for tests
+    where cleanup also calls move_on_after and needs the real implementation.
+    """
     return _CancelScopeErrorOnExit()
+
+
+# Save reference before any patching (evaluated at import time)
+_real_anyio_move_on_after = anyio.move_on_after
+
+
+class _MockMoveOnAfterFirstCallError:
+    """move_on_after mock that raises CancelScope error only on first call.
+
+    In production, only the outer move_on_after (timeout scope) encounters
+    CancelScope corruption from the SDK. The cleanup's move_on_after creates
+    fresh scopes that are not corrupted. This mock replicates that behavior.
+    """
+
+    def __init__(self) -> None:
+        self._first = True
+
+    def __call__(self, delay: float) -> _CancelScopeErrorOnExit | anyio.CancelScope:
+        if self._first:
+            self._first = False
+            return _CancelScopeErrorOnExit()
+        return _real_anyio_move_on_after(delay)
 
 
 class MockAsyncGeneratorBase:
@@ -147,13 +173,13 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
         ), "Should log warning about cancel scope conflict"
 
     @pytest.mark.asyncio
-    async def test_cleanup_propagates_non_cancel_scope_runtime_error(
+    async def test_cleanup_logs_non_cancel_scope_runtime_error(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Non-cancel-scope RuntimeError should be logged (not suppressed silently).
+        """Non-cancel-scope RuntimeError should be logged as error.
 
-        RuntimeError with a message unrelated to cancel scopes should still
-        be caught and logged (same behavior as other exceptions), not silently dropped.
+        RuntimeError with a message unrelated to cancel scopes should be
+        caught and logged as error, not silently dropped or propagated.
         """
         model = ClaudeCodeModel()
 
@@ -170,13 +196,12 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
                     gen._as_message_iterator(), timeout=5.0
                 )
 
-        # Should still raise CLIExecutionError (timeout), not the RuntimeError
         assert exc_info.value.error_type == "timeout"
         assert gen.aclose_called
         assert any(
-            "failed to close query generator" in record.message.lower()
+            "runtimeerror during query generator cleanup" in record.message.lower()
             for record in caplog.records
-        ), "Should log error about failed generator close"
+        ), "Should log error about RuntimeError during cleanup"
 
 
 class TestExecuteSdkQueryCancelScopeHandling:
@@ -268,6 +293,7 @@ class TestExecuteSdkQueryCancelScopeHandling:
 
             def __init__(self) -> None:
                 self._yielded = False
+                self.aclose_called = False
 
             def __aiter__(self) -> "SuccessfulGenerator":
                 return self
@@ -279,17 +305,19 @@ class TestExecuteSdkQueryCancelScopeHandling:
                 return mock_result
 
             async def aclose(self) -> None:
-                pass
+                self.aclose_called = True
+
+        gen_instance = SuccessfulGenerator()
 
         def mock_query(**kwargs: object) -> SuccessfulGenerator:
-            return SuccessfulGenerator()
+            return gen_instance
 
         with caplog.at_level(logging.WARNING):
             with (
                 patch("claudecode_model.model.query", mock_query),
                 patch(
                     "claudecode_model.model.anyio.move_on_after",
-                    _mock_move_on_after_with_error,
+                    _MockMoveOnAfterFirstCallError(),
                 ),
             ):
                 query_result = await model._execute_sdk_query(
@@ -298,9 +326,71 @@ class TestExecuteSdkQueryCancelScopeHandling:
 
         assert query_result.result_message is mock_result
         assert query_result.captured_structured_output_input is None
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called to prevent "
+            "'Task exception was never retrieved' errors"
+        )
         assert any(
             "result preserved" in record.message.lower() for record in caplog.records
         ), "Should log warning that result was preserved despite cancel scope conflict"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_successful_query_cleans_up_with_scope_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Generator cleanup should handle CancelScope error during aclose().
+
+        When the preserved result is returned, query_generator.aclose() is called.
+        If aclose() itself raises a CancelScope RuntimeError (from SDK's
+        internal query.close() failure), it should be caught and logged.
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        mock_result = create_mock_result_message(result="Success from SDK")
+
+        class GeneratorWithScopeErrorOnClose:
+            def __init__(self) -> None:
+                self._yielded = False
+                self.aclose_called = False
+
+            def __aiter__(self) -> "GeneratorWithScopeErrorOnClose":
+                return self
+
+            async def __anext__(self) -> ResultMessage:
+                if self._yielded:
+                    raise StopAsyncIteration
+                self._yielded = True
+                return mock_result
+
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise RuntimeError(_CANCEL_SCOPE_ERROR_MSG)
+
+        gen_instance = GeneratorWithScopeErrorOnClose()
+
+        def mock_query(**kwargs: object) -> GeneratorWithScopeErrorOnClose:
+            return gen_instance
+
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _MockMoveOnAfterFirstCallError(),
+                ),
+            ):
+                query_result = await model._execute_sdk_query(
+                    "Test prompt", options, timeout=60.0
+                )
+
+        assert query_result.result_message is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called even if it raises"
+        )
+        assert any(
+            "cancel scope conflict during generator cleanup" in record.message.lower()
+            for record in caplog.records
+        ), "Should log warning about cancel scope conflict during cleanup"
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_successful_query_with_structured_output(
@@ -357,7 +447,7 @@ class TestExecuteSdkQueryCancelScopeHandling:
             patch("claudecode_model.model.query", mock_query),
             patch(
                 "claudecode_model.model.anyio.move_on_after",
-                _mock_move_on_after_with_error,
+                _MockMoveOnAfterFirstCallError(),
             ),
         ):
             query_result = await model._execute_sdk_query(
@@ -470,6 +560,7 @@ class TestStreamMessagesCancelScopeHandling:
             def __init__(self) -> None:
                 self._messages: list[ResultMessage] = [mock_result]
                 self._index = 0
+                self.aclose_called = False
 
             def __aiter__(self) -> "CompletedStreamGenerator":
                 return self
@@ -482,10 +573,12 @@ class TestStreamMessagesCancelScopeHandling:
                 return msg
 
             async def aclose(self) -> None:
-                pass
+                self.aclose_called = True
+
+        gen_instance = CompletedStreamGenerator()
 
         def mock_query(**kwargs: object) -> CompletedStreamGenerator:
-            return CompletedStreamGenerator()
+            return gen_instance
 
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -502,7 +595,7 @@ class TestStreamMessagesCancelScopeHandling:
                 patch("claudecode_model.model.query", mock_query),
                 patch(
                     "claudecode_model.model.anyio.move_on_after",
-                    _mock_move_on_after_with_error,
+                    _MockMoveOnAfterFirstCallError(),
                 ),
             ):
                 async for message in model.stream_messages(
@@ -514,9 +607,87 @@ class TestStreamMessagesCancelScopeHandling:
 
         assert len(collected) == 1
         assert collected[0] is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called to prevent "
+            "'Task exception was never retrieved' errors"
+        )
         assert any(
             "results preserved" in record.message.lower() for record in caplog.records
         ), "Should log warning that stream results were preserved"
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_after_complete_stream_cleans_up_with_scope_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Stream generator cleanup should handle CancelScope error during aclose().
+
+        When stream completes and result is preserved, query_generator.aclose()
+        is called. If aclose() itself raises a CancelScope RuntimeError
+        (from SDK's internal query.close() failure), it should be caught
+        and logged.
+        """
+        model = ClaudeCodeModel()
+        mock_result = create_mock_result_message(result="Streamed success")
+
+        class StreamGeneratorWithScopeErrorOnClose:
+            def __init__(self) -> None:
+                self._messages: list[ResultMessage] = [mock_result]
+                self._index = 0
+                self.aclose_called = False
+
+            def __aiter__(self) -> "StreamGeneratorWithScopeErrorOnClose":
+                return self
+
+            async def __anext__(self) -> ResultMessage:
+                if self._index >= len(self._messages):
+                    raise StopAsyncIteration
+                msg = self._messages[self._index]
+                self._index += 1
+                return msg
+
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise RuntimeError(_CANCEL_SCOPE_ERROR_MSG)
+
+        gen_instance = StreamGeneratorWithScopeErrorOnClose()
+
+        def mock_query(**kwargs: object) -> StreamGeneratorWithScopeErrorOnClose:
+            return gen_instance
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 60.0}
+
+        collected: list[Message] = []
+        with caplog.at_level(logging.WARNING):
+            with (
+                patch("claudecode_model.model.query", mock_query),
+                patch(
+                    "claudecode_model.model.anyio.move_on_after",
+                    _MockMoveOnAfterFirstCallError(),
+                ),
+            ):
+                async for message in model.stream_messages(
+                    messages,
+                    settings,
+                    params,
+                ):
+                    collected.append(message)
+
+        assert len(collected) == 1
+        assert collected[0] is mock_result
+        assert gen_instance.aclose_called, (
+            "query_generator.aclose() must be called even if it raises"
+        )
+        assert any(
+            "cancel scope conflict during generator cleanup" in record.message.lower()
+            for record in caplog.records
+        ), "Should log warning about cancel scope conflict during cleanup"
 
     @pytest.mark.asyncio
     async def test_cancel_scope_error_after_multi_message_stream(self) -> None:
@@ -567,7 +738,7 @@ class TestStreamMessagesCancelScopeHandling:
             patch("claudecode_model.model.query", mock_query),
             patch(
                 "claudecode_model.model.anyio.move_on_after",
-                _mock_move_on_after_with_error,
+                _MockMoveOnAfterFirstCallError(),
             ),
         ):
             async for message in model.stream_messages(
@@ -580,6 +751,104 @@ class TestStreamMessagesCancelScopeHandling:
         assert len(collected) == 2
         assert collected[0] is mock_assistant
         assert collected[1] is mock_result
+
+
+class TestCleanupQueryGeneratorSafe:
+    """Direct unit tests for _cleanup_query_generator_safe."""
+
+    @pytest.mark.asyncio
+    async def test_none_generator_is_noop(self) -> None:
+        """None input should return immediately without error."""
+        model = ClaudeCodeModel()
+        await model._cleanup_query_generator_safe(None)
+
+    @pytest.mark.asyncio
+    async def test_generator_without_aclose_is_noop(self) -> None:
+        """Generator without aclose attribute should return immediately."""
+        model = ClaudeCodeModel()
+
+        class NoAcloseIterator:
+            def __aiter__(self) -> "NoAcloseIterator":
+                return self
+
+            async def __anext__(self) -> Message:
+                raise StopAsyncIteration
+
+        gen = cast(AsyncIterator[Message], NoAcloseIterator())
+        # Should not have aclose, but delattr isn't needed since class doesn't define it
+        assert not hasattr(gen, "aclose")
+        await model._cleanup_query_generator_safe(gen)
+
+    @pytest.mark.asyncio
+    async def test_successful_aclose(self) -> None:
+        """Normal aclose() should be called without error."""
+        model = ClaudeCodeModel()
+
+        class CleanGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+
+        gen = CleanGenerator()
+        await model._cleanup_query_generator_safe(gen._as_message_iterator())
+        assert gen.aclose_called
+
+    @pytest.mark.asyncio
+    async def test_cancel_scope_error_suppressed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CancelScope RuntimeError from aclose() should be logged and suppressed."""
+        model = ClaudeCodeModel()
+
+        class ScopeErrorGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise RuntimeError(_CANCEL_SCOPE_ERROR_MSG)
+
+        gen = ScopeErrorGenerator()
+        with caplog.at_level(logging.WARNING):
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
+
+        assert gen.aclose_called
+        assert any(
+            "cancel scope conflict during generator cleanup" in record.message.lower()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_os_error_suppressed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """OSError from aclose() should be logged and suppressed."""
+        model = ClaudeCodeModel()
+
+        class OSErrorGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise BrokenPipeError("Subprocess pipe broken")
+
+        gen = OSErrorGenerator()
+        with caplog.at_level(logging.ERROR):
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
+
+        assert gen.aclose_called
+        assert any(
+            "failed to close query generator" in record.message.lower()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_programming_error_propagates(self) -> None:
+        """Programming errors (TypeError, etc.) should NOT be suppressed."""
+        model = ClaudeCodeModel()
+
+        class BuggyGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise TypeError("unexpected argument type")
+
+        gen = BuggyGenerator()
+        with pytest.raises(TypeError, match="unexpected argument type"):
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
+
+        assert gen.aclose_called
 
 
 class TestCleanupTimeoutConstants:

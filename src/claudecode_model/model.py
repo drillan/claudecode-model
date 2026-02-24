@@ -701,6 +701,7 @@ class ClaudeCodeModel(Model):
                     e,
                     timeout,
                 )
+                await self._cleanup_query_generator_safe(query_generator)
                 return query_result
             logger.warning(
                 "Cancel scope conflict during SDK query timeout "
@@ -714,15 +715,74 @@ class ClaudeCodeModel(Model):
             # which means move_on_after cancelled before return was reached.
             await self._cleanup_query_generator_on_timeout(query_generator, timeout)
 
+    async def _cleanup_query_generator_safe(
+        self,
+        query_generator: AsyncIterator[Message] | None,
+    ) -> None:
+        """Close async generator, logging and suppressing expected errors.
+
+        Ensures the generator is closed to prevent 'Task exception was never
+        retrieved' warnings that occur when GC closes the generator in a
+        background task where CancelScope errors cannot be caught.
+
+        Shield protects cleanup from external cancellation (e.g.,
+        caller-provided cancel scopes or framework-level timeouts) to allow
+        claude-agent-sdk's internal _tg.__aexit__() to complete properly.
+        Without shielding, outer scopes can cancel our cleanup, leaving
+        the scope tree inconsistent.
+
+        Args:
+            query_generator: The async generator to close, or None.
+        """
+        if query_generator is None or not hasattr(query_generator, "aclose"):
+            return
+        logger.debug(
+            "Entering shielded cleanup for query generator "
+            "(cleanup_timeout=%s seconds, generator_type=%s)",
+            _CLEANUP_TIMEOUT_SECONDS,
+            type(query_generator).__qualname__,
+        )
+        with anyio.CancelScope(shield=True):
+            with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
+                try:
+                    await query_generator.aclose()  # type: ignore[union-attr]
+                except RuntimeError as e:
+                    if _is_cancel_scope_error(e):
+                        logger.warning(
+                            "Cancel scope conflict during generator "
+                            "cleanup (SDK task group issue, "
+                            "generator_type=%s): %s",
+                            type(query_generator).__qualname__,
+                            e,
+                        )
+                    else:
+                        logger.error(
+                            "RuntimeError during query generator cleanup "
+                            "(generator_type=%s)",
+                            type(query_generator).__qualname__,
+                            exc_info=True,
+                        )
+                except OSError:
+                    logger.error(
+                        "Failed to close query generator during cleanup "
+                        "(generator_type=%s)",
+                        type(query_generator).__qualname__,
+                        exc_info=True,
+                    )
+            if cleanup_scope.cancelled_caught:
+                logger.error(
+                    "Query generator cleanup timed out after %s seconds "
+                    "(generator_type=%s)",
+                    _CLEANUP_TIMEOUT_SECONDS,
+                    type(query_generator).__qualname__,
+                )
+
     async def _cleanup_query_generator_on_timeout(
         self,
         query_generator: AsyncIterator[Message] | None,
         timeout: float,
     ) -> NoReturn:
-        """Clean up async generator and raise timeout error.
-
-        Closes the async generator gracefully to ensure subprocess termination
-        when a timeout occurs. Logs warnings if cleanup fails or times out.
+        """Delegate generator cleanup to _cleanup_query_generator_safe, then raise timeout.
 
         Args:
             query_generator: The async generator to close, or None.
@@ -731,44 +791,7 @@ class ClaudeCodeModel(Model):
         Raises:
             CLIExecutionError: Always raises with timeout error_type.
         """
-        if query_generator is not None and hasattr(query_generator, "aclose"):
-            # Shield cleanup from external cancellation (e.g., caller-provided
-            # cancel scopes or other framework-level timeouts) to allow
-            # claude-agent-sdk's internal _tg.__aexit__() to complete properly.
-            # Without shielding, outer scopes can cancel our cleanup, leaving
-            # the scope tree inconsistent.
-            logger.debug(
-                "Entering shielded cleanup for query generator "
-                "(cleanup_timeout=%s seconds)",
-                _CLEANUP_TIMEOUT_SECONDS,
-            )
-            with anyio.CancelScope(shield=True):
-                with anyio.move_on_after(_CLEANUP_TIMEOUT_SECONDS) as cleanup_scope:
-                    try:
-                        await query_generator.aclose()  # type: ignore[union-attr]
-                    except RuntimeError as e:
-                        if _is_cancel_scope_error(e):
-                            logger.warning(
-                                "Cancel scope conflict during generator "
-                                "cleanup (SDK task group issue): %s",
-                                e,
-                            )
-                        else:
-                            logger.error(
-                                "Failed to close query generator during "
-                                "timeout cleanup",
-                                exc_info=True,
-                            )
-                    except Exception:
-                        logger.error(
-                            "Failed to close query generator during timeout cleanup",
-                            exc_info=True,
-                        )
-                if cleanup_scope.cancelled_caught:
-                    logger.warning(
-                        "Query generator cleanup timed out after %s seconds",
-                        _CLEANUP_TIMEOUT_SECONDS,
-                    )
+        await self._cleanup_query_generator_safe(query_generator)
         raise CLIExecutionError(
             f"SDK query timed out after {timeout} seconds",
             exit_code=TIMEOUT_EXIT_CODE,
@@ -1392,6 +1415,7 @@ class ClaudeCodeModel(Model):
                         e,
                         settings.timeout,
                     )
+                    await self._cleanup_query_generator_safe(query_generator)
                     return
                 logger.warning(
                     "Cancel scope conflict during stream_messages timeout "
