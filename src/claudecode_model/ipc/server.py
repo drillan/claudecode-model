@@ -191,20 +191,34 @@ def _is_socket_active(path: Path) -> bool:
     Attempts a non-blocking connect to distinguish active sockets (from
     concurrent sessions) from stale files left by crashed processes.
 
-    Returns ``True`` if the socket accepts connections, ``False`` otherwise.
+    Returns ``True`` if the socket accepts or may accept connections.
+    Returns ``False`` only when the socket is confirmed inactive.
+    On ambiguous errors (fd exhaustion, permissions), returns ``True``
+    to avoid deleting a potentially active socket.
     """
-    if not stat.S_ISSOCK(path.lstat().st_mode):
+    try:
+        mode = path.lstat().st_mode
+    except (FileNotFoundError, OSError):
         return False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    if not stat.S_ISSOCK(mode):
+        return False
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        # Cannot create socket (e.g. fd exhaustion) — assume active to be safe
+        return True
     try:
         sock.setblocking(False)
         sock.connect(str(path))
         return True
     except BlockingIOError:
-        # Non-blocking connect in progress — socket IS listening
+        # EINPROGRESS: kernel reached the socket's listen queue
         return True
-    except (ConnectionRefusedError, FileNotFoundError, OSError):
+    except (ConnectionRefusedError, FileNotFoundError):
         return False
+    except OSError:
+        # Ambiguous error (permissions, etc.) — assume active to be safe
+        return True
     finally:
         sock.close()
 
@@ -294,15 +308,15 @@ class IPCSession:
         for candidate in tmp_dir.glob(pattern):
             if candidate.name == own_socket:
                 continue
-            if _is_socket_active(candidate):
-                logger.debug("Skipping active socket: %s", candidate)
-                continue
             try:
+                if _is_socket_active(candidate):
+                    logger.debug("Skipping active socket: %s", candidate)
+                    continue
                 candidate.unlink()
                 logger.info("Removed stale socket file: %s", candidate)
             except OSError:
                 logger.warning(
-                    "Failed to remove stale socket file: %s",
+                    "Failed to clean up socket file: %s",
                     candidate,
                     exc_info=True,
                 )

@@ -10,12 +10,13 @@ T013: IPCSession tests — lifecycle, socket path generation, schema file creati
 import asyncio
 import json
 import os
+import socket
 import struct
 import tempfile
 import uuid
 from pathlib import Path
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -27,7 +28,12 @@ from claudecode_model.ipc.protocol import (
     SOCKET_PERMISSIONS,
     ToolSchema,
 )
-from claudecode_model.ipc.server import IPCServer, IPCSession, ToolHandler
+from claudecode_model.ipc.server import (
+    IPCServer,
+    IPCSession,
+    ToolHandler,
+    _is_socket_active,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -686,11 +692,44 @@ class TestStaleSocketCleanupSafety:
 
     @pytest.mark.asyncio
     async def test_truly_stale_socket_still_deleted(self) -> None:
-        """A non-listening socket file (stale) is still cleaned up."""
-        # Create a fake socket file that is NOT actively listening
+        """A real Unix socket that is no longer listening (stale) is cleaned up."""
         stale_path = (
             Path(tempfile.gettempdir())
             / f"{SOCKET_FILE_PREFIX}stale_dead_session{SOCKET_FILE_SUFFIX}"
+        )
+        # Create a real Unix socket file, then close it (no longer listening)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            if stale_path.exists():
+                stale_path.unlink()
+            sock.bind(str(stale_path))
+        finally:
+            sock.close()
+        assert stale_path.exists()
+
+        schemas: list[ToolSchema] = [
+            {"name": "t1", "description": "d1", "input_schema": {}},
+        ]
+
+        async def dummy_handler(args: dict[str, object]) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        session = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+        await session.start()
+        try:
+            assert not stale_path.exists(), "Truly stale socket was not cleaned up"
+        finally:
+            await session.stop()
+
+    @pytest.mark.asyncio
+    async def test_regular_file_treated_as_stale(self) -> None:
+        """A regular file (not a socket) matching the pattern is cleaned up."""
+        stale_path = (
+            Path(tempfile.gettempdir())
+            / f"{SOCKET_FILE_PREFIX}regular_file{SOCKET_FILE_SUFFIX}"
         )
         stale_path.touch()
         assert stale_path.exists()
@@ -708,8 +747,7 @@ class TestStaleSocketCleanupSafety:
         )
         await session.start()
         try:
-            # Stale (non-listening) socket should be removed
-            assert not stale_path.exists(), "Truly stale socket was not cleaned up"
+            assert not stale_path.exists(), "Regular file was not cleaned up"
         finally:
             await session.stop()
 
@@ -755,3 +793,118 @@ class TestStaleSocketCleanupSafety:
         finally:
             await session_a.stop()
             await session_b.stop()
+
+
+# ── _is_socket_active() Unit Tests ──────────────────────────────────────
+
+
+class TestIsSocketActive:
+    """Unit tests for the _is_socket_active() helper function."""
+
+    def test_nonexistent_path_returns_false(self, tmp_path: Path) -> None:
+        """Returns False for a path that does not exist (TOCTOU safety)."""
+        nonexistent = tmp_path / "does_not_exist.sock"
+        assert _is_socket_active(nonexistent) is False
+
+    def test_regular_file_returns_false(self, tmp_path: Path) -> None:
+        """Returns False for a regular file (not a socket)."""
+        regular_file = tmp_path / "regular.sock"
+        regular_file.touch()
+        assert _is_socket_active(regular_file) is False
+
+    @pytest.mark.asyncio
+    async def test_active_listening_socket_returns_true(self, tmp_path: Path) -> None:
+        """Returns True for a socket that is actively listening."""
+        socket_path = tmp_path / "active.sock"
+        server = IPCServer(str(socket_path), {})
+        await server.start()
+        try:
+            assert _is_socket_active(socket_path) is True
+        finally:
+            await server.stop()
+
+    def test_closed_socket_returns_false(self, tmp_path: Path) -> None:
+        """Returns False for a socket that was bound but is no longer listening."""
+        socket_path = tmp_path / "closed.sock"
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(socket_path))
+        finally:
+            sock.close()
+        assert socket_path.exists()
+        assert _is_socket_active(socket_path) is False
+
+    def test_socket_creation_failure_returns_true(self, tmp_path: Path) -> None:
+        """Returns True (safe-side) when socket.socket() itself fails (e.g. fd exhaustion)."""
+        socket_path = tmp_path / "active.sock"
+        # Create a real socket file so lstat S_ISSOCK passes
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(socket_path))
+            sock.listen(1)
+        except OSError:
+            sock.close()
+            pytest.skip("Could not create test socket")
+
+        try:
+            with patch(
+                "claudecode_model.ipc.server.socket.socket",
+                side_effect=OSError("EMFILE: Too many open files"),
+            ):
+                # Should return True (safe side) — cannot confirm inactive
+                assert _is_socket_active(socket_path) is True
+        finally:
+            sock.close()
+
+
+# ── Cleanup Loop Resilience Tests ────────────────────────────────────────
+
+
+class TestCleanupLoopResilience:
+    """_cleanup_stale_sockets() loop must not be interrupted by errors on individual files."""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_continues_after_problematic_file(self) -> None:
+        """A broken file in the middle of glob results does not prevent other stale files from being cleaned."""
+        tmp_dir = Path(tempfile.gettempdir())
+
+        # Create two stale files
+        stale_a = tmp_dir / f"{SOCKET_FILE_PREFIX}stale_aaa{SOCKET_FILE_SUFFIX}"
+        stale_b = tmp_dir / f"{SOCKET_FILE_PREFIX}stale_bbb{SOCKET_FILE_SUFFIX}"
+        stale_a.touch()
+        stale_b.touch()
+
+        schemas: list[ToolSchema] = [
+            {"name": "t1", "description": "d1", "input_schema": {}},
+        ]
+
+        async def dummy_handler(args: dict[str, object]) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        original_is_active = _is_socket_active
+
+        def flaky_is_active(path: Path) -> bool:
+            if "stale_aaa" in str(path):
+                raise PermissionError("simulated permission error")
+            return original_is_active(path)
+
+        session = IPCSession(
+            tool_handlers={"t1": dummy_handler},
+            tool_schemas=schemas,
+        )
+
+        with patch(
+            "claudecode_model.ipc.server._is_socket_active", side_effect=flaky_is_active
+        ):
+            await session.start()
+
+        try:
+            # stale_b should still be cleaned despite stale_a causing an error
+            assert not stale_b.exists(), (
+                "stale_b was not cleaned up — loop was interrupted by stale_a's error"
+            )
+        finally:
+            # Clean up stale_a if it still exists
+            if stale_a.exists():
+                stale_a.unlink()
+            await session.stop()
