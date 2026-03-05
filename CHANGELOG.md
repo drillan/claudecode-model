@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.38] - 2026-03-05
+
+### Fixed
+
+- `anyio.move_on_after` を `asyncio.timeout` に置換して CancelScope ツリー破損を根本解決 (#150)
+  - `_execute_sdk_query` と `stream_messages` のタイムアウト処理を `asyncio.timeout` に移行
+  - anyio の CancelScope ツリーを汚染しなくなり、pydantic-graph / pydantic-ai との互換性が確保される
+  - `_had_cancel_scope_conflict` フラグと CancelScope 衝突復旧コードを削除（根本原因が除去されたため）
+  - `_cleanup_query_generator_safe` は引き続き `CancelScope(shield=True)` を使用（外部キャンセルからの保護）
+
 ## [0.0.37] - 2026-03-05
 
 ### Fixed

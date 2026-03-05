@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -121,15 +122,13 @@ _CANCEL_SCOPE_ERROR_PATTERNS: tuple[str, ...] = (
 def _is_cancel_scope_error(error: RuntimeError) -> bool:
     """Check if a RuntimeError is caused by anyio cancel scope tree corruption.
 
-    The claude-agent-sdk manages its internal task group with manual
-    __aenter__()/__aexit__() calls. When a timeout cancellation prevents
-    _tg.__aexit__() from completing, the cancel scope remains on the task's
-    scope stack. This causes anyio to raise RuntimeError when the outer scope
-    (e.g., move_on_after) tries to exit and finds a stale scope still current.
+    Used only by _cleanup_query_generator_safe() to distinguish expected SDK
+    cancel scope errors from unexpected RuntimeErrors during generator cleanup.
 
-    Matches against known anyio CancelScope error message prefixes rather than
-    a broad substring to avoid false positives that could silently suppress
-    unrelated RuntimeErrors (see Issue #144 review).
+    Since Issue #150 replaced the main timeout scopes (move_on_after) with
+    asyncio.timeout, cancel scope tree corruption no longer occurs in the main
+    execution path. However, generator aclose() may still trigger SDK-internal
+    cancel scope errors that need to be handled gracefully.
 
     Note: This relies on anyio's internal error message format, which may
     change across versions. Tested with anyio 4.x.
@@ -195,7 +194,6 @@ class ClaudeCodeModel(Model):
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
         self._transport: TransportType = DEFAULT_TRANSPORT
-        self._had_cancel_scope_conflict: bool = False
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -639,9 +637,10 @@ class ClaudeCodeModel(Model):
                         # Invoke callback for intermediate messages
                         await self._invoke_callback(message)
             except Exception as e:
-                # Let cancel scope RuntimeError propagate to the outer handler
-                # instead of wrapping it as CLIExecutionError (see Issue #142).
-                if isinstance(e, RuntimeError) and _is_cancel_scope_error(e):
+                # TimeoutError is an Exception subclass; re-raise so it
+                # reaches the outer except TimeoutError handler instead of
+                # being wrapped as CLIExecutionError(error_type="unknown").
+                if isinstance(e, TimeoutError):
                     raise
                 raise CLIExecutionError(
                     f"SDK query failed: {e}",
@@ -663,17 +662,12 @@ class ClaudeCodeModel(Model):
                 captured_structured_output_input=captured_structured_output_input,
             )
 
-        # Wrapped in try/except RuntimeError to handle cancel scope tree
-        # corruption caused by claude-agent-sdk's manual task group
-        # __aenter__/__aexit__. When timeout fires, _tg.__aexit__() may not
-        # complete, leaving the scope on the stack so move_on_after.__exit__()
-        # cannot pop its own scope (see Issue #142).
-        #
-        # query_result is initialized here so the except block can check
-        # whether run_query() completed before the RuntimeError (Issue #144).
-        query_result: _QueryResult | None = None
+        # Use asyncio.timeout instead of anyio.move_on_after to avoid
+        # polluting the anyio CancelScope tree. asyncio.timeout operates at
+        # the asyncio level and does not interfere with pydantic-graph's
+        # CancelScope usage (see Issue #150).
         try:
-            with anyio.move_on_after(timeout):
+            async with asyncio.timeout(timeout):
                 query_result = await run_query()
                 result = query_result.result_message
                 logger.debug(
@@ -688,33 +682,7 @@ class ClaudeCodeModel(Model):
                     query_result.captured_structured_output_input is not None,
                 )
                 return query_result
-        except RuntimeError as e:
-            if not _is_cancel_scope_error(e):
-                raise
-            # Query completed successfully but move_on_after.__exit__() raised
-            # RuntimeError due to stale CancelScope from SDK's task group.
-            # Return the successful result instead of discarding it (Issue #144).
-            if query_result is not None:
-                logger.warning(
-                    "Cancel scope conflict after successful SDK query "
-                    "(SDK task group issue, result preserved): %s "
-                    "(timeout=%.1fs)",
-                    e,
-                    timeout,
-                )
-                self._had_cancel_scope_conflict = True
-                await self._cleanup_query_generator_safe(query_generator)
-                return query_result
-            logger.warning(
-                "Cancel scope conflict during SDK query timeout "
-                "(SDK task group issue): %s (timeout=%.1fs)",
-                e,
-                timeout,
-            )
-            await self._cleanup_query_generator_on_timeout(query_generator, timeout)
-        else:
-            # else runs only when try completes without return/exception,
-            # which means move_on_after cancelled before return was reached.
+        except TimeoutError:
             await self._cleanup_query_generator_on_timeout(query_generator, timeout)
 
     async def _cleanup_query_generator_safe(
@@ -1040,20 +1008,6 @@ class ClaudeCodeModel(Model):
         # Check for error response from SDK
         if result.is_error:
             empty_result = not result.result
-            if empty_result and self._had_cancel_scope_conflict:
-                logger.warning(
-                    "SDK returned is_error=True with empty result after prior "
-                    "CancelScope conflict (likely corrupted SDK state): "
-                    "subtype=%s, num_turns=%s, duration_ms=%s, session_id=%s",
-                    result.subtype,
-                    result.num_turns,
-                    result.duration_ms,
-                    result.session_id,
-                )
-            elif not empty_result:
-                # Non-empty error is a definite SDK failure, not CancelScope
-                # aftermath. Clear the flag to prevent false correlation.
-                self._had_cancel_scope_conflict = False
             raise CLIExecutionError(
                 f"SDK reported error: {result.result or 'Unknown error'}",
                 exit_code=None,
@@ -1061,9 +1015,6 @@ class ClaudeCodeModel(Model):
                 error_type="invalid_response",
                 recoverable=empty_result,
             )
-
-        # SDK query succeeded without error; clear CancelScope conflict flag
-        self._had_cancel_scope_conflict = False
 
         # Check for structured output extraction failure
         if (
@@ -1388,31 +1339,22 @@ class ClaudeCodeModel(Model):
         # Start IPC server before streaming, stop in finally block
         await self._start_ipc_server()
         try:
-            # Wrapped in try/except RuntimeError to handle cancel scope tree
-            # corruption caused by claude-agent-sdk's manual task group
-            # __aenter__/__aexit__. When timeout fires, _tg.__aexit__() may not
-            # complete, leaving the scope on the stack so move_on_after.__exit__()
-            # cannot pop its own scope (see Issue #142).
-            #
-            # stream_completed tracks whether the async for loop finished
-            # naturally, so the except block can distinguish a false timeout
-            # from a real one (Issue #144).
+            # Use asyncio.timeout instead of anyio.move_on_after to avoid
+            # polluting the anyio CancelScope tree (see Issue #150).
             query_generator: AsyncIterator[Message] | None = None
-            stream_completed: bool = False
             try:
-                with anyio.move_on_after(settings.timeout) as cancel_scope:
+                async with asyncio.timeout(settings.timeout):
                     try:
                         query_generator = query(prompt=user_prompt, options=options)
                         async for message in query_generator:
                             if message is None:
                                 continue
                             yield message
-                        stream_completed = True
                     except Exception as e:
-                        # Let cancel scope RuntimeError propagate to the outer
-                        # handler instead of wrapping it as CLIExecutionError
-                        # (see Issue #142).
-                        if isinstance(e, RuntimeError) and _is_cancel_scope_error(e):
+                        # TimeoutError is an Exception subclass; re-raise so it
+                        # reaches the outer except TimeoutError handler instead of
+                        # being wrapped as CLIExecutionError(error_type="unknown").
+                        if isinstance(e, TimeoutError):
                             raise
                         raise CLIExecutionError(
                             f"SDK query failed: {e}",
@@ -1421,42 +1363,10 @@ class ClaudeCodeModel(Model):
                             error_type="unknown",
                             recoverable=False,
                         ) from e
-            except RuntimeError as e:
-                if not _is_cancel_scope_error(e):
-                    raise
-                # Stream completed successfully but move_on_after.__exit__()
-                # raised RuntimeError due to stale CancelScope from SDK's
-                # task group. All messages were already yielded (Issue #144).
-                if stream_completed:
-                    logger.warning(
-                        "Cancel scope conflict after completed stream "
-                        "(SDK task group issue, results preserved): %s "
-                        "(timeout=%.1fs)",
-                        e,
-                        settings.timeout,
-                    )
-                    self._had_cancel_scope_conflict = True
-                    await self._cleanup_query_generator_safe(query_generator)
-                    return
-                logger.warning(
-                    "Cancel scope conflict during stream_messages timeout "
-                    "(SDK task group issue): %s (timeout=%.1fs)",
-                    e,
-                    settings.timeout,
-                )
+            except TimeoutError:
                 await self._cleanup_query_generator_on_timeout(
                     query_generator, settings.timeout
                 )
-            else:
-                # else runs only when try completes without return/exception,
-                # which means move_on_after cancelled before yield completed.
-                if cancel_scope.cancelled_caught:
-                    await self._cleanup_query_generator_on_timeout(
-                        query_generator, settings.timeout
-                    )
-                else:
-                    # Normal successful streaming completion
-                    self._had_cancel_scope_conflict = False
         finally:
             await self._stop_ipc_server()
 
