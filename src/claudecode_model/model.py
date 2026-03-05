@@ -637,8 +637,9 @@ class ClaudeCodeModel(Model):
                         # Invoke callback for intermediate messages
                         await self._invoke_callback(message)
             except Exception as e:
-                # TimeoutError is an Exception subclass; re-raise so
-                # asyncio.timeout.__aexit__() can convert it properly.
+                # TimeoutError is an Exception subclass; re-raise so it
+                # reaches the outer except TimeoutError handler instead of
+                # being wrapped as CLIExecutionError(error_type="unknown").
                 if isinstance(e, TimeoutError):
                     raise
                 raise CLIExecutionError(
@@ -1350,8 +1351,9 @@ class ClaudeCodeModel(Model):
                                 continue
                             yield message
                     except Exception as e:
-                        # TimeoutError is an Exception subclass; re-raise so
-                        # asyncio.timeout.__aexit__() can convert it properly.
+                        # TimeoutError is an Exception subclass; re-raise so it
+                        # reaches the outer except TimeoutError handler instead of
+                        # being wrapped as CLIExecutionError(error_type="unknown").
                         if isinstance(e, TimeoutError):
                             raise
                         raise CLIExecutionError(
