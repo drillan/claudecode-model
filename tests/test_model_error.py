@@ -75,6 +75,7 @@ class TestClaudeCodeModelIsErrorHandling:
                 await model._execute_request(messages, None)
 
         assert "Unknown error" in str(exc_info.value)
+        assert exc_info.value.recoverable is True
 
 
 class TestClaudeCodeModelSDKExceptionHandling:

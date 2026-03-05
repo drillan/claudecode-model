@@ -31,7 +31,8 @@ class CLIExecutionError(ClaudeCodeError):
             - "timeout": Operation timed out (recoverable with longer timeout)
             - "permission": Permission denied error (not recoverable)
             - "cli_not_found": CLI executable not found (not recoverable)
-            - "invalid_response": Invalid/malformed response (not recoverable)
+            - "invalid_response": Invalid/malformed response (recoverable when
+                result is empty, otherwise not recoverable)
             - "unknown": Unknown error type (not recoverable)
             - None: Error type not determined (legacy or manual instantiation)
         recoverable: Whether the error may be recovered by retrying.
