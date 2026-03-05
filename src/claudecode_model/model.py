@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import logging
@@ -672,8 +671,18 @@ class ClaudeCodeModel(Model):
             # cancel Task B and wait for its cleanup to finish.
             if not sdk_task.done():
                 sdk_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await sdk_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # Unexpected exception from Task B cleanup (e.g., TypeError
+                # from aclose()). Log but don't propagate, as it would mask
+                # the primary error (e.g., TimeoutError → CLIExecutionError).
+                logger.warning(
+                    "Unexpected exception from SDK task during cleanup",
+                    exc_info=True,
+                )
 
     async def _execute_sdk_query(
         self,
