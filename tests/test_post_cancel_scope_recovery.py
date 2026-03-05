@@ -320,3 +320,65 @@ class TestCancelScopeConflictFlag:
                 pass
 
         assert model._had_cancel_scope_conflict is True
+
+    @pytest.mark.asyncio
+    async def test_stream_normal_success_clears_flag(self) -> None:
+        """_had_cancel_scope_conflict should be False after normal streaming success.
+
+        When stream_messages completes without any CancelScope conflict,
+        the flag should be cleared to prevent false correlation.
+        """
+        model = ClaudeCodeModel()
+        mock_result = create_mock_result_message(result="Streamed success")
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield mock_result
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 60.0}
+
+        # Simulate a prior CancelScope conflict
+        model._had_cancel_scope_conflict = True
+
+        with patch("claudecode_model.model.query", mock_query):
+            async for _ in model.stream_messages(messages, settings, params):
+                pass
+
+        assert model._had_cancel_scope_conflict is False
+
+    @pytest.mark.asyncio
+    async def test_nonempty_error_clears_flag(self) -> None:
+        """_had_cancel_scope_conflict should be False after non-empty error.
+
+        When a non-empty error occurs (e.g., "Rate limit exceeded"), it is
+        a definite SDK failure unrelated to CancelScope aftermath. The flag
+        should be cleared to prevent false correlation with future errors.
+        """
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        # Simulate a prior CancelScope conflict
+        model._had_cancel_scope_conflict = True
+
+        error_result = create_mock_result_message(
+            result="Rate limit exceeded",
+            is_error=True,
+            subtype="error",
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError):
+                await model._execute_request(messages, None)
+
+        assert model._had_cancel_scope_conflict is False

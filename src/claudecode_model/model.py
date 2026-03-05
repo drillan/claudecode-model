@@ -1050,6 +1050,10 @@ class ClaudeCodeModel(Model):
                     result.duration_ms,
                     result.session_id,
                 )
+            elif not empty_result:
+                # Non-empty error is a definite SDK failure, not CancelScope
+                # aftermath. Clear the flag to prevent false correlation.
+                self._had_cancel_scope_conflict = False
             raise CLIExecutionError(
                 f"SDK reported error: {result.result or 'Unknown error'}",
                 exit_code=None,
@@ -1450,6 +1454,9 @@ class ClaudeCodeModel(Model):
                     await self._cleanup_query_generator_on_timeout(
                         query_generator, settings.timeout
                     )
+                else:
+                    # Normal successful streaming completion
+                    self._had_cancel_scope_conflict = False
         finally:
             await self._stop_ipc_server()
 
