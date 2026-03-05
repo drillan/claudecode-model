@@ -9,15 +9,14 @@ Verifies that:
 6. asyncio.timeout cancels Task B and triggers cleanup
 7. CancelledError triggers proper generator cleanup in Task B
 8. End-to-end behavior of _execute_sdk_query and stream_messages is preserved
+9. Unexpected exceptions from sdk_task cleanup are logged and suppressed
 """
 
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from typing import cast
 from unittest.mock import patch
 
-import anyio
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions
 from claude_agent_sdk.types import (
@@ -34,27 +33,10 @@ from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import ClaudeCodeModelSettings
 
 from .conftest import create_mock_result_message
+from .test_cancel_scope_fix import MockAsyncGeneratorBase
 
-
-class MockAsyncGeneratorBase:
-    """Base class for mock async generators with configurable behavior."""
-
-    def __init__(self, *, slow: bool = True) -> None:
-        self._slow = slow
-        self._closed = False
-        self.aclose_called = False
-
-    def __aiter__(self) -> "MockAsyncGeneratorBase":
-        return self
-
-    async def __anext__(self) -> Message:
-        if self._slow:
-            await anyio.sleep(10)
-        raise StopAsyncIteration  # pragma: no cover
-
-    def _as_message_iterator(self) -> AsyncIterator[Message]:
-        """Cast self to AsyncIterator[Message] for type-safe test calls."""
-        return cast(AsyncIterator[Message], self)
+# Timeout for waiting on async events in tests (generous to avoid flaky failures).
+_TEST_EVENT_TIMEOUT = 5.0
 
 
 class TestRunSdkQueryIsolatedYieldsMessages:
@@ -222,6 +204,8 @@ class TestRunSdkQueryIsolatedCleanup:
         options = ClaudeAgentOptions()
         mock_result = create_mock_result_message(result="Done")
 
+        cleanup_done = asyncio.Event()
+
         class TrackingGenerator(MockAsyncGeneratorBase):
             def __init__(self) -> None:
                 super().__init__(slow=False)
@@ -235,6 +219,7 @@ class TestRunSdkQueryIsolatedCleanup:
 
             async def aclose(self) -> None:
                 self.aclose_called = True
+                cleanup_done.set()
 
         gen = TrackingGenerator()
 
@@ -245,8 +230,7 @@ class TestRunSdkQueryIsolatedCleanup:
             async for _ in model._run_sdk_query_isolated("Test", options):
                 pass
 
-        # Allow Task B's finally to complete
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(cleanup_done.wait(), timeout=_TEST_EVENT_TIMEOUT)
         assert gen.aclose_called
 
     @pytest.mark.asyncio
@@ -255,6 +239,8 @@ class TestRunSdkQueryIsolatedCleanup:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
         mock_result = create_mock_result_message(result="Done")
+
+        cleanup_done = asyncio.Event()
 
         class InfiniteGenerator(MockAsyncGeneratorBase):
             def __init__(self) -> None:
@@ -269,6 +255,7 @@ class TestRunSdkQueryIsolatedCleanup:
 
             async def aclose(self) -> None:
                 self.aclose_called = True
+                cleanup_done.set()
 
         gen = InfiniteGenerator()
 
@@ -279,8 +266,7 @@ class TestRunSdkQueryIsolatedCleanup:
             async for _ in model._run_sdk_query_isolated("Test", options):
                 break  # Break after first message
 
-        # Allow Task B's finally to complete
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(cleanup_done.wait(), timeout=_TEST_EVENT_TIMEOUT)
         assert gen.aclose_called
 
     @pytest.mark.asyncio
@@ -289,9 +275,12 @@ class TestRunSdkQueryIsolatedCleanup:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
+        cleanup_done = asyncio.Event()
+
         class SlowGenerator(MockAsyncGeneratorBase):
             async def aclose(self) -> None:
                 self.aclose_called = True
+                cleanup_done.set()
 
         gen = SlowGenerator()
 
@@ -304,8 +293,7 @@ class TestRunSdkQueryIsolatedCleanup:
                     async for _ in model._run_sdk_query_isolated("Test", options):
                         pass  # pragma: no cover
 
-        # Allow Task B's finally to complete
-        await asyncio.sleep(0.2)
+        await asyncio.wait_for(cleanup_done.wait(), timeout=_TEST_EVENT_TIMEOUT)
         assert gen.aclose_called
 
     @pytest.mark.asyncio
@@ -316,6 +304,8 @@ class TestRunSdkQueryIsolatedCleanup:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
         mock_result = create_mock_result_message(result="Done")
+
+        cleanup_done = asyncio.Event()
 
         class ScopeCorruptionGenerator(MockAsyncGeneratorBase):
             def __init__(self) -> None:
@@ -330,6 +320,7 @@ class TestRunSdkQueryIsolatedCleanup:
 
             async def aclose(self) -> None:
                 self.aclose_called = True
+                cleanup_done.set()
                 raise RuntimeError(
                     "Attempted to exit a cancel scope that isn't the "
                     "current tasks's current cancel scope"
@@ -345,9 +336,87 @@ class TestRunSdkQueryIsolatedCleanup:
                 async for _ in model._run_sdk_query_isolated("Test", options):
                     pass
 
-        # Allow Task B's finally to complete
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(cleanup_done.wait(), timeout=_TEST_EVENT_TIMEOUT)
         assert gen.aclose_called
+
+
+class TestRunSdkQueryIsolatedUnexpectedCleanupException:
+    """Tests that unexpected exceptions from Task B cleanup are suppressed."""
+
+    @pytest.mark.asyncio
+    async def test_unexpected_cleanup_exception_does_not_propagate(self) -> None:
+        """TypeError from aclose() should NOT propagate to the caller.
+
+        When _cleanup_query_generator_safe propagates an unexpected exception
+        (e.g., TypeError from aclose()), it is caught either by _sdk_task_fn's
+        except Exception handler (if Task B is not cancelled) or suppressed via
+        the generator finally's except Exception handler (if Task B completed
+        with the exception before being cancelled). In both cases, the caller
+        must not see the TypeError.
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        mock_result = create_mock_result_message(result="Done")
+
+        cleanup_done = asyncio.Event()
+
+        class BuggyCloseGenerator(MockAsyncGeneratorBase):
+            def __init__(self) -> None:
+                super().__init__(slow=False)
+                self._yielded = False
+
+            async def __anext__(self) -> Message:
+                if self._yielded:
+                    raise StopAsyncIteration
+                self._yielded = True
+                return mock_result
+
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                cleanup_done.set()
+                raise TypeError("unexpected argument type in cleanup")
+
+        gen = BuggyCloseGenerator()
+
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return gen._as_message_iterator()
+
+        with patch("claudecode_model.model.query", mock_query):
+            # Should NOT raise TypeError - it should be suppressed
+            async for _ in model._run_sdk_query_isolated("Test", options):
+                pass
+
+        await asyncio.wait_for(cleanup_done.wait(), timeout=_TEST_EVENT_TIMEOUT)
+        assert gen.aclose_called
+
+    @pytest.mark.asyncio
+    async def test_unexpected_cleanup_exception_does_not_mask_timeout(self) -> None:
+        """TypeError from aclose() should not mask a TimeoutError.
+
+        When a timeout fires and Task B's cleanup raises TypeError,
+        the caller should see CLIExecutionError(error_type='timeout'),
+        not TypeError.
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+
+        class BuggySlowGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+                raise TypeError("unexpected argument type in cleanup")
+
+        gen = BuggySlowGenerator()
+
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return gen._as_message_iterator()
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_sdk_query("Test", options, timeout=0.1)
+
+        assert exc_info.value.error_type == "timeout", (
+            "Timeout error should not be masked by cleanup TypeError"
+        )
 
 
 class TestCallbackRunsInCallerTask:

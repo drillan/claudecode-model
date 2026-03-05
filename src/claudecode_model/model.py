@@ -647,6 +647,14 @@ class ClaudeCodeModel(Model):
                         )
                     except asyncio.CancelledError:
                         pass  # shield interrupted; cleanup has its own timeout
+                    except Exception:
+                        # Unexpected exception from cleanup (e.g., TypeError
+                        # from aclose()). Log but don't propagate, as it would
+                        # mask the primary error flow in Task A.
+                        logger.warning(
+                            "Unexpected exception during SDK query generator cleanup",
+                            exc_info=True,
+                        )
 
         sdk_task = asyncio.create_task(_sdk_task_fn())
         try:
