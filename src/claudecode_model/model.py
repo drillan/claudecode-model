@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, NamedTuple, NoReturn
+from typing import TYPE_CHECKING, NamedTuple
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
@@ -91,6 +91,20 @@ class _QueryResult(NamedTuple):
 
     result_message: ResultMessage
     captured_structured_output_input: dict[str, JsonValue] | None
+
+
+class _QueueError(NamedTuple):
+    """Signals an exception from SDK Task B to caller Task A."""
+
+    exception: BaseException
+
+
+class _QueueDone(NamedTuple):
+    """Signals that SDK Task B has finished iterating the generator."""
+
+
+# Union type for queue items relayed from SDK Task B to caller Task A.
+_QueueItem = Message | _QueueError | _QueueDone
 
 
 # Tool name used by Claude Agent SDK for structured output
@@ -580,6 +594,104 @@ class ClaudeCodeModel(Model):
             can_use_tool=self._build_can_use_tool(),
         )
 
+    async def _run_sdk_query_isolated(
+        self,
+        prompt: str,
+        options: ClaudeAgentOptions,
+    ) -> AsyncIterator[Message]:
+        """Run SDK query in an isolated asyncio Task, yielding messages.
+
+        The SDK query runs in a separate asyncio Task (Task B) to isolate
+        anyio CancelScope state from the caller's Task (Task A). Messages
+        are relayed through an unbounded asyncio.Queue.
+
+        This prevents CancelScope tree corruption caused by SDK's internal
+        task group (Query._tg) from affecting pydantic-graph's CancelScope
+        usage in the caller's task.
+
+        Args:
+            prompt: The user prompt to send.
+            options: ClaudeAgentOptions for the query.
+
+        Yields:
+            Message objects from the SDK query.
+
+        Raises:
+            CLIExecutionError: If SDK execution fails (non-timeout).
+            TimeoutError: If SDK raises TimeoutError internally.
+        """
+        message_queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
+
+        async def _sdk_task_fn() -> None:
+            """Task B: iterate SDK generator, relay messages via queue."""
+            query_generator: AsyncIterator[Message] | None = None
+            try:
+                query_generator = query(prompt=prompt, options=options)
+                async for message in query_generator:
+                    if message is None:
+                        continue
+                    await message_queue.put(message)
+                await message_queue.put(_QueueDone())
+            except asyncio.CancelledError:
+                # Cancelled by Task A (e.g., timeout). Don't put on queue;
+                # Task A is no longer consuming. Fall through to finally.
+                return
+            except Exception as exc:
+                await message_queue.put(_QueueError(exception=exc))
+            finally:
+                # Generator cleanup runs in Task B where its CancelScope lives.
+                if query_generator is not None:
+                    try:
+                        await asyncio.shield(
+                            self._cleanup_query_generator_safe(query_generator)
+                        )
+                    except asyncio.CancelledError:
+                        pass  # shield interrupted; cleanup has its own timeout
+                    except Exception:
+                        # Unexpected exception from cleanup (e.g., TypeError
+                        # from aclose()). Log but don't propagate, as it would
+                        # mask the primary error flow in Task A.
+                        logger.warning(
+                            "Unexpected exception during SDK query generator cleanup",
+                            exc_info=True,
+                        )
+
+        sdk_task = asyncio.create_task(_sdk_task_fn())
+        try:
+            while True:
+                item = await message_queue.get()
+                if isinstance(item, _QueueDone):
+                    break
+                if isinstance(item, _QueueError):
+                    exc = item.exception
+                    if isinstance(exc, TimeoutError):
+                        raise exc
+                    raise CLIExecutionError(
+                        f"SDK query failed: {exc}",
+                        exit_code=None,
+                        stderr=str(exc),
+                        error_type="unknown",
+                        recoverable=False,
+                    ) from exc
+                yield item
+        finally:
+            # On aclose() (normal completion, break, TimeoutError, etc.),
+            # cancel Task B and wait for its cleanup to finish.
+            if not sdk_task.done():
+                sdk_task.cancel()
+            try:
+                await sdk_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # Unexpected exception from Task B cleanup (e.g., TypeError
+                # from aclose()). Log but don't propagate, as it would mask
+                # the primary error (e.g., TimeoutError → CLIExecutionError).
+                logger.warning(
+                    "Unexpected exception from SDK task during cleanup",
+                    exc_info=True,
+                )
+
     async def _execute_sdk_query(
         self,
         prompt: str,
@@ -587,6 +699,10 @@ class ClaudeCodeModel(Model):
         timeout: float,
     ) -> _QueryResult:
         """Execute Claude Agent SDK query and return _QueryResult.
+
+        The SDK query runs in an isolated asyncio Task via
+        _run_sdk_query_isolated() to prevent CancelScope tree corruption
+        from SDK's internal task group (see Issue #152).
 
         Args:
             prompt: The user prompt to send.
@@ -610,15 +726,10 @@ class ClaudeCodeModel(Model):
 
         result_message: ResultMessage | None = None
         captured_structured_output_input: dict[str, JsonValue] | None = None
-        query_generator: AsyncIterator[Message] | None = None
 
-        async def run_query() -> _QueryResult:
-            nonlocal result_message, captured_structured_output_input, query_generator
-            try:
-                query_generator = query(prompt=prompt, options=options)
-                async for message in query_generator:
-                    if message is None:
-                        continue
+        try:
+            async with asyncio.timeout(timeout):
+                async for message in self._run_sdk_query_isolated(prompt, options):
                     if isinstance(message, ResultMessage):
                         result_message = message
                         break
@@ -634,56 +745,44 @@ class ClaudeCodeModel(Model):
                                     and block.name == _STRUCTURED_OUTPUT_TOOL_NAME
                                 ):
                                     captured_structured_output_input = block.input
-                        # Invoke callback for intermediate messages
+                        # Invoke callback in Task A (caller's CancelScope context)
                         await self._invoke_callback(message)
-            except Exception as e:
-                # TimeoutError is an Exception subclass; re-raise so it
-                # reaches the outer except TimeoutError handler instead of
-                # being wrapped as CLIExecutionError(error_type="unknown").
-                if isinstance(e, TimeoutError):
-                    raise
-                raise CLIExecutionError(
-                    f"SDK query failed: {e}",
-                    exit_code=None,
-                    stderr=str(e),
-                    error_type="unknown",
-                    recoverable=False,
-                ) from e
-            if result_message is None:
-                raise CLIExecutionError(
-                    "No ResultMessage received from SDK",
-                    exit_code=None,
-                    stderr="Query completed but no ResultMessage was yielded",
-                    error_type="invalid_response",
-                    recoverable=False,
-                )
-            return _QueryResult(
-                result_message=result_message,
-                captured_structured_output_input=captured_structured_output_input,
+        except TimeoutError:
+            # Cleanup is handled by _run_sdk_query_isolated's finally block.
+            raise CLIExecutionError(
+                f"SDK query timed out after {timeout} seconds",
+                exit_code=TIMEOUT_EXIT_CODE,
+                stderr="Query was cancelled due to timeout",
+                error_type="timeout",
+                recoverable=True,
             )
 
-        # Use asyncio.timeout instead of anyio.move_on_after to avoid
-        # polluting the anyio CancelScope tree. asyncio.timeout operates at
-        # the asyncio level and does not interfere with pydantic-graph's
-        # CancelScope usage (see Issue #150).
-        try:
-            async with asyncio.timeout(timeout):
-                query_result = await run_query()
-                result = query_result.result_message
-                logger.debug(
-                    "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
-                    "is_error=%s, input_tokens=%d, output_tokens=%d, "
-                    "has_captured_structured_output=%s",
-                    result.num_turns,
-                    result.duration_ms,
-                    result.is_error,
-                    result.usage.get("input_tokens", 0) if result.usage else 0,
-                    result.usage.get("output_tokens", 0) if result.usage else 0,
-                    query_result.captured_structured_output_input is not None,
-                )
-                return query_result
-        except TimeoutError:
-            await self._cleanup_query_generator_on_timeout(query_generator, timeout)
+        if result_message is None:
+            raise CLIExecutionError(
+                "No ResultMessage received from SDK",
+                exit_code=None,
+                stderr="Query completed but no ResultMessage was yielded",
+                error_type="invalid_response",
+                recoverable=False,
+            )
+
+        query_result = _QueryResult(
+            result_message=result_message,
+            captured_structured_output_input=captured_structured_output_input,
+        )
+        result = query_result.result_message
+        logger.debug(
+            "_execute_sdk_query completed: num_turns=%s, duration_ms=%s, "
+            "is_error=%s, input_tokens=%d, output_tokens=%d, "
+            "has_captured_structured_output=%s",
+            result.num_turns,
+            result.duration_ms,
+            result.is_error,
+            result.usage.get("input_tokens", 0) if result.usage else 0,
+            result.usage.get("output_tokens", 0) if result.usage else 0,
+            query_result.captured_structured_output_input is not None,
+        )
+        return query_result
 
     async def _cleanup_query_generator_safe(
         self,
@@ -746,29 +845,6 @@ class ClaudeCodeModel(Model):
                     _CLEANUP_TIMEOUT_SECONDS,
                     type(query_generator).__qualname__,
                 )
-
-    async def _cleanup_query_generator_on_timeout(
-        self,
-        query_generator: AsyncIterator[Message] | None,
-        timeout: float,
-    ) -> NoReturn:
-        """Delegate generator cleanup to _cleanup_query_generator_safe, then raise timeout.
-
-        Args:
-            query_generator: The async generator to close, or None.
-            timeout: The original timeout value (for error message).
-
-        Raises:
-            CLIExecutionError: Always raises with timeout error_type.
-        """
-        await self._cleanup_query_generator_safe(query_generator)
-        raise CLIExecutionError(
-            f"SDK query timed out after {timeout} seconds",
-            exit_code=TIMEOUT_EXIT_CODE,
-            stderr="Query was cancelled due to timeout",
-            error_type="timeout",
-            recoverable=True,
-        )
 
     def _try_unwrap_parameters_wrapper(
         self, result: ResultMessage
@@ -1339,33 +1415,23 @@ class ClaudeCodeModel(Model):
         # Start IPC server before streaming, stop in finally block
         await self._start_ipc_server()
         try:
-            # Use asyncio.timeout instead of anyio.move_on_after to avoid
-            # polluting the anyio CancelScope tree (see Issue #150).
-            query_generator: AsyncIterator[Message] | None = None
+            # SDK query runs in isolated asyncio Task via
+            # _run_sdk_query_isolated() to prevent CancelScope tree
+            # corruption (see Issue #152).
             try:
                 async with asyncio.timeout(settings.timeout):
-                    try:
-                        query_generator = query(prompt=user_prompt, options=options)
-                        async for message in query_generator:
-                            if message is None:
-                                continue
-                            yield message
-                    except Exception as e:
-                        # TimeoutError is an Exception subclass; re-raise so it
-                        # reaches the outer except TimeoutError handler instead of
-                        # being wrapped as CLIExecutionError(error_type="unknown").
-                        if isinstance(e, TimeoutError):
-                            raise
-                        raise CLIExecutionError(
-                            f"SDK query failed: {e}",
-                            exit_code=None,
-                            stderr=str(e),
-                            error_type="unknown",
-                            recoverable=False,
-                        ) from e
+                    async for message in self._run_sdk_query_isolated(
+                        user_prompt, options
+                    ):
+                        yield message
             except TimeoutError:
-                await self._cleanup_query_generator_on_timeout(
-                    query_generator, settings.timeout
+                # Cleanup is handled by _run_sdk_query_isolated's finally block.
+                raise CLIExecutionError(
+                    f"SDK query timed out after {settings.timeout} seconds",
+                    exit_code=TIMEOUT_EXIT_CODE,
+                    stderr="Query was cancelled due to timeout",
+                    error_type="timeout",
+                    recoverable=True,
                 )
         finally:
             await self._stop_ipc_server()
