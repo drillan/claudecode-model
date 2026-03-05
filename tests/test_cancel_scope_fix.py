@@ -17,7 +17,6 @@ import anyio
 import pytest
 from claude_agent_sdk.types import Message
 
-from claudecode_model.exceptions import CLIExecutionError
 from claudecode_model.model import ClaudeCodeModel, _CLEANUP_TIMEOUT_SECONDS
 
 
@@ -49,8 +48,12 @@ class MockAsyncGeneratorBase:
         return cast(AsyncIterator[Message], self)
 
 
-class TestCleanupQueryGeneratorOnTimeoutShielding:
-    """Tests that _cleanup_query_generator_on_timeout shields aclose() from external cancellation."""
+class TestCleanupQueryGeneratorSafeShielding:
+    """Tests that _cleanup_query_generator_safe shields aclose() from external cancellation.
+
+    Since Issue #152, cleanup runs inside Task B's finally block via
+    _cleanup_query_generator_safe (no longer via _cleanup_query_generator_on_timeout).
+    """
 
     @pytest.mark.asyncio
     async def test_shielded_cleanup_completes_despite_external_cancel(self) -> None:
@@ -75,12 +78,8 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
         # Run cleanup inside an external cancel scope that fires quickly
         # (simulating pydantic-graph's outer timeout)
         with anyio.CancelScope(shield=True):
-            with pytest.raises(CLIExecutionError) as exc_info:
-                await model._cleanup_query_generator_on_timeout(
-                    gen._as_message_iterator(), timeout=5.0
-                )
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
 
-        assert exc_info.value.error_type == "timeout"
         assert gen.aclose_called
         assert aclose_completed, "aclose() should complete inside shielded scope"
 
@@ -104,12 +103,8 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
         gen = ScopeCorruptionGenerator()
 
         with caplog.at_level(logging.WARNING):
-            with pytest.raises(CLIExecutionError) as exc_info:
-                await model._cleanup_query_generator_on_timeout(
-                    gen._as_message_iterator(), timeout=5.0
-                )
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
 
-        assert exc_info.value.error_type == "timeout"
         assert gen.aclose_called
         assert any(
             "cancel scope" in record.message.lower() for record in caplog.records
@@ -134,12 +129,8 @@ class TestCleanupQueryGeneratorOnTimeoutShielding:
         gen = OtherRuntimeErrorGenerator()
 
         with caplog.at_level(logging.ERROR):
-            with pytest.raises(CLIExecutionError) as exc_info:
-                await model._cleanup_query_generator_on_timeout(
-                    gen._as_message_iterator(), timeout=5.0
-                )
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
 
-        assert exc_info.value.error_type == "timeout"
         assert gen.aclose_called
         assert any(
             "runtimeerror during query generator cleanup" in record.message.lower()
@@ -253,8 +244,14 @@ class TestCleanupTimeoutConstants:
         assert _CLEANUP_TIMEOUT_SECONDS > 0
 
     @pytest.mark.asyncio
-    async def test_cleanup_timeout_applied(self) -> None:
-        """Cleanup should timeout if aclose() takes too long."""
+    async def test_cleanup_timeout_applied(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Cleanup should timeout if aclose() takes too long.
+
+        _cleanup_query_generator_safe uses anyio.move_on_after internally,
+        so a very slow aclose() should be cancelled after the timeout.
+        """
         model = ClaudeCodeModel()
 
         class VerySlowCloseGenerator(MockAsyncGeneratorBase):
@@ -265,10 +262,10 @@ class TestCleanupTimeoutConstants:
 
         gen = VerySlowCloseGenerator(slow=False)
 
-        with pytest.raises(CLIExecutionError) as exc_info:
-            await model._cleanup_query_generator_on_timeout(
-                gen._as_message_iterator(), timeout=5.0
-            )
+        with caplog.at_level(logging.ERROR):
+            await model._cleanup_query_generator_safe(gen._as_message_iterator())
 
-        assert exc_info.value.error_type == "timeout"
         assert gen.aclose_called
+        assert any(
+            "cleanup timed out" in record.message.lower() for record in caplog.records
+        ), "Should log error about cleanup timeout"
