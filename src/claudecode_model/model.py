@@ -195,6 +195,7 @@ class ClaudeCodeModel(Model):
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
         self._transport: TransportType = DEFAULT_TRANSPORT
+        self._had_cancel_scope_conflict: bool = False
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -701,6 +702,7 @@ class ClaudeCodeModel(Model):
                     e,
                     timeout,
                 )
+                self._had_cancel_scope_conflict = True
                 await self._cleanup_query_generator_safe(query_generator)
                 return query_result
             logger.warning(
@@ -1037,13 +1039,27 @@ class ClaudeCodeModel(Model):
 
         # Check for error response from SDK
         if result.is_error:
+            empty_result = not result.result
+            if empty_result and self._had_cancel_scope_conflict:
+                logger.warning(
+                    "SDK returned is_error=True with empty result after prior "
+                    "CancelScope conflict (likely corrupted SDK state): "
+                    "subtype=%s, num_turns=%s, duration_ms=%s, session_id=%s",
+                    result.subtype,
+                    result.num_turns,
+                    result.duration_ms,
+                    result.session_id,
+                )
             raise CLIExecutionError(
                 f"SDK reported error: {result.result or 'Unknown error'}",
                 exit_code=None,
                 stderr=result.result or "",
                 error_type="invalid_response",
-                recoverable=False,
+                recoverable=empty_result,
             )
+
+        # SDK query succeeded without error; clear CancelScope conflict flag
+        self._had_cancel_scope_conflict = False
 
         # Check for structured output extraction failure
         if (
@@ -1415,6 +1431,7 @@ class ClaudeCodeModel(Model):
                         e,
                         settings.timeout,
                     )
+                    self._had_cancel_scope_conflict = True
                     await self._cleanup_query_generator_safe(query_generator)
                     return
                 logger.warning(
