@@ -6,12 +6,13 @@ Verifies that:
 2. _had_cancel_scope_conflict flag is removed
 3. Normal timeout behavior works with asyncio.timeout
 4. stream_messages timeout works with asyncio.timeout
+5. Cleanup (aclose) is called on timeout for both execution paths
+6. Query completion just before timeout does not cause scope corruption
 """
 
 from collections.abc import AsyncIterator
 from unittest.mock import patch
 
-import anyio
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions
 from claude_agent_sdk.types import Message, ResultMessage
@@ -23,6 +24,7 @@ from claudecode_model.model import ClaudeCodeModel
 from claudecode_model.types import ClaudeCodeModelSettings
 
 from .conftest import create_mock_result_message
+from .test_cancel_scope_fix import MockAsyncGeneratorBase
 
 
 class TestTimeoutErrorReRaiseGuard:
@@ -51,18 +53,12 @@ class TestTimeoutErrorReRaiseGuard:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
-        class SDKTimeoutGenerator:
-            def __aiter__(self) -> "SDKTimeoutGenerator":
-                return self
-
+        class SDKTimeoutGenerator(MockAsyncGeneratorBase):
             async def __anext__(self) -> Message:
                 raise TimeoutError("SDK internal timeout")
 
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> SDKTimeoutGenerator:
-            return SDKTimeoutGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return SDKTimeoutGenerator(slow=False)._as_message_iterator()
 
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(CLIExecutionError) as exc_info:
@@ -77,18 +73,12 @@ class TestTimeoutErrorReRaiseGuard:
         """TimeoutError raised by SDK in stream_messages should result in error_type='timeout'."""
         model = ClaudeCodeModel()
 
-        class SDKTimeoutGenerator:
-            def __aiter__(self) -> "SDKTimeoutGenerator":
-                return self
-
+        class SDKTimeoutGenerator(MockAsyncGeneratorBase):
             async def __anext__(self) -> Message:
                 raise TimeoutError("SDK internal timeout")
 
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> SDKTimeoutGenerator:
-            return SDKTimeoutGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return SDKTimeoutGenerator(slow=False)._as_message_iterator()
 
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -133,19 +123,8 @@ class TestAsyncioTimeoutBehavior:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
-        class SlowGenerator:
-            def __aiter__(self) -> "SlowGenerator":
-                return self
-
-            async def __anext__(self) -> Message:
-                await anyio.sleep(10)
-                raise StopAsyncIteration  # pragma: no cover
-
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> SlowGenerator:
-            return SlowGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return MockAsyncGeneratorBase()._as_message_iterator()
 
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(CLIExecutionError) as exc_info:
@@ -159,47 +138,29 @@ class TestAsyncioTimeoutBehavior:
         """Timeout should call aclose() on the generator via cleanup."""
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
-        aclose_called = False
 
-        class SlowGenerator:
-            def __aiter__(self) -> "SlowGenerator":
-                return self
-
-            async def __anext__(self) -> Message:
-                await anyio.sleep(10)
-                raise StopAsyncIteration  # pragma: no cover
-
+        class TrackingGenerator(MockAsyncGeneratorBase):
             async def aclose(self) -> None:
-                nonlocal aclose_called
-                aclose_called = True
+                self.aclose_called = True
 
-        def mock_query(**kwargs: object) -> SlowGenerator:
-            return SlowGenerator()
+        gen = TrackingGenerator()
+
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return gen._as_message_iterator()
 
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(CLIExecutionError):
                 await model._execute_sdk_query("Test prompt", options, timeout=0.1)
 
-        assert aclose_called
+        assert gen.aclose_called
 
     @pytest.mark.asyncio
     async def test_stream_messages_timeout_raises_cli_error(self) -> None:
         """Timeout in stream_messages should raise CLIExecutionError(timeout)."""
         model = ClaudeCodeModel()
 
-        class SlowGenerator:
-            def __aiter__(self) -> "SlowGenerator":
-                return self
-
-            async def __anext__(self) -> Message:
-                await anyio.sleep(10)
-                raise StopAsyncIteration  # pragma: no cover
-
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> SlowGenerator:
-            return SlowGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return MockAsyncGeneratorBase()._as_message_iterator()
 
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
@@ -223,18 +184,52 @@ class TestAsyncioTimeoutBehavior:
         assert exc_info.value.recoverable is True
 
     @pytest.mark.asyncio
+    async def test_stream_messages_timeout_calls_cleanup(self) -> None:
+        """Timeout in stream_messages should call aclose() on the generator."""
+        model = ClaudeCodeModel()
+
+        class TrackingGenerator(MockAsyncGeneratorBase):
+            async def aclose(self) -> None:
+                self.aclose_called = True
+
+        gen = TrackingGenerator()
+
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return gen._as_message_iterator()
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 0.1}
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError):
+                async for _ in model.stream_messages(
+                    messages,
+                    settings,
+                    params,
+                ):
+                    pass  # pragma: no cover
+
+        assert gen.aclose_called, (
+            "aclose() should be called on the generator when stream_messages times out"
+        )
+
+    @pytest.mark.asyncio
     async def test_normal_query_completes_successfully(self) -> None:
         """Normal query should complete without CancelScope error handling."""
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
         mock_result = create_mock_result_message(result="Success")
 
-        class SuccessfulGenerator:
+        class SuccessfulGenerator(MockAsyncGeneratorBase):
             def __init__(self) -> None:
+                super().__init__(slow=False)
                 self._yielded = False
-
-            def __aiter__(self) -> "SuccessfulGenerator":
-                return self
 
             async def __anext__(self) -> ResultMessage:
                 if self._yielded:
@@ -242,11 +237,8 @@ class TestAsyncioTimeoutBehavior:
                 self._yielded = True
                 return mock_result
 
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> SuccessfulGenerator:
-            return SuccessfulGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return SuccessfulGenerator()._as_message_iterator()
 
         with patch("claudecode_model.model.query", mock_query):
             query_result = await model._execute_sdk_query(
@@ -291,21 +283,92 @@ class TestAsyncioTimeoutBehavior:
         model = ClaudeCodeModel()
         options = ClaudeAgentOptions()
 
-        class RuntimeErrorGenerator:
-            def __aiter__(self) -> "RuntimeErrorGenerator":
-                return self
-
+        class RuntimeErrorGenerator(MockAsyncGeneratorBase):
             async def __anext__(self) -> Message:
                 raise RuntimeError("Unrelated internal error")
 
-            async def aclose(self) -> None:
-                pass
-
-        def mock_query(**kwargs: object) -> RuntimeErrorGenerator:
-            return RuntimeErrorGenerator()
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return RuntimeErrorGenerator(slow=False)._as_message_iterator()
 
         with patch("claudecode_model.model.query", mock_query):
             with pytest.raises(CLIExecutionError) as exc_info:
                 await model._execute_sdk_query("Test prompt", options, timeout=60.0)
 
         assert exc_info.value.error_type == "unknown"
+
+
+class TestQueryCompletionBeforeTimeout:
+    """Tests that query completing just before timeout returns normally.
+
+    With the old move_on_after implementation, a query completing just before
+    timeout could trigger CancelScope tree corruption (RuntimeError from
+    move_on_after.__exit__()). With asyncio.timeout, this structural issue
+    cannot occur because asyncio.timeout does not participate in the anyio
+    scope tree.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fast_query_with_tight_timeout_succeeds(self) -> None:
+        """Query that completes within timeout should return normally.
+
+        Even with a tight timeout, a query that finishes in time should
+        succeed without any scope-related errors.
+        """
+        model = ClaudeCodeModel()
+        options = ClaudeAgentOptions()
+        mock_result = create_mock_result_message(result="Just in time")
+
+        class FastGenerator(MockAsyncGeneratorBase):
+            def __init__(self) -> None:
+                super().__init__(slow=False)
+                self._yielded = False
+
+            async def __anext__(self) -> ResultMessage:
+                if self._yielded:
+                    raise StopAsyncIteration
+                self._yielded = True
+                return mock_result
+
+        def mock_query(**kwargs: object) -> AsyncIterator[Message]:
+            return FastGenerator()._as_message_iterator()
+
+        with patch("claudecode_model.model.query", mock_query):
+            query_result = await model._execute_sdk_query(
+                "Test prompt", options, timeout=0.5
+            )
+
+        assert query_result.result_message is mock_result
+
+    @pytest.mark.asyncio
+    async def test_fast_stream_with_tight_timeout_succeeds(self) -> None:
+        """Stream that completes within timeout should yield all messages.
+
+        With asyncio.timeout, there is no CancelScope conflict risk when
+        the stream finishes just before the deadline.
+        """
+        model = ClaudeCodeModel()
+        mock_result = create_mock_result_message(result="Streamed just in time")
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield mock_result
+
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+        )
+        settings: ClaudeCodeModelSettings = {"timeout": 0.5}
+
+        collected: list[Message] = []
+        with patch("claudecode_model.model.query", mock_query):
+            async for message in model.stream_messages(
+                messages,
+                settings,
+                params,
+            ):
+                collected.append(message)
+
+        assert len(collected) == 1
+        assert collected[0] is mock_result
