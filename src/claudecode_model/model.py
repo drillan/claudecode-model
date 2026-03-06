@@ -1081,22 +1081,30 @@ class ClaudeCodeModel(Model):
         )
         result = query_result.result_message
 
-        # Check for error response from SDK
-        if result.is_error:
+        # Check for structured output recovery before is_error check.
+        # When subtype is a recovery candidate and json_schema is provided,
+        # recovery should be attempted even if is_error=True, because the SDK
+        # may set is_error for subtypes like error_during_execution while the
+        # result still contains recoverable structured output data.
+        is_recovery_candidate = (
+            result.subtype in _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
+            and json_schema is not None
+        )
+
+        # Check for error response from SDK (skip if recovery will be attempted)
+        if result.is_error and not is_recovery_candidate:
             empty_result = not result.result
             raise CLIExecutionError(
-                f"SDK reported error: {result.result or 'Unknown error'}",
+                f"SDK reported error: {result.result or 'Unknown error'} "
+                f"(subtype={result.subtype}, session_id={result.session_id}, "
+                f"num_turns={result.num_turns}, duration_ms={result.duration_ms})",
                 exit_code=None,
                 stderr=result.result or "",
                 error_type="invalid_response",
                 recoverable=empty_result,
             )
 
-        # Check for structured output extraction failure
-        if (
-            result.subtype in _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES
-            and json_schema is not None
-        ):
+        if is_recovery_candidate:
             # 1. Try to recover from result (existing method)
             unwrapped = self._try_unwrap_parameters_wrapper(result)
             if unwrapped is not None:
