@@ -1110,8 +1110,9 @@ class ClaudeCodeModel(Model):
             if unwrapped is not None:
                 logger.info(
                     "Recovered from %s by unwrapping "
-                    "parameters wrapper: session_id=%s, num_turns=%s, duration_ms=%s",
+                    "parameters wrapper: is_error=%s, session_id=%s, num_turns=%s, duration_ms=%s",
                     result.subtype,
+                    result.is_error,
                     result.session_id,
                     result.num_turns,
                     result.duration_ms,
@@ -1127,9 +1128,10 @@ class ClaudeCodeModel(Model):
                 if recovered is not None:
                     logger.info(
                         "Recovered from %s using "
-                        "captured ToolUseBlock input: session_id=%s, num_turns=%s, "
-                        "duration_ms=%s",
+                        "captured ToolUseBlock input: is_error=%s, session_id=%s, "
+                        "num_turns=%s, duration_ms=%s",
                         result.subtype,
+                        result.is_error,
                         result.session_id,
                         result.num_turns,
                         result.duration_ms,
