@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import ModelRequestParameters, OutputObjectDefinition
 
 from claudecode_model.model import ClaudeCodeModel
+from claudecode_model.types import JsonValue
 
 from .conftest import create_mock_result_message
 
@@ -1752,23 +1753,22 @@ class TestErrorDuringExecutionRecovery:
     """
 
     @pytest.mark.asyncio
-    async def test_error_during_execution_with_is_error_raises_cli_error(
+    async def test_is_error_true_with_recovery_subtype_attempts_recovery(
         self,
     ) -> None:
-        """Should raise CLIExecutionError when is_error=True, bypassing recovery.
+        """Should attempt recovery when is_error=True but subtype is recoverable.
 
-        When the SDK sets is_error=True, the error check fires before
-        the recovery logic. This test documents that is_error=True
-        takes precedence over structured output recovery.
+        When the SDK sets is_error=True AND the subtype is in
+        _STRUCTURED_OUTPUT_RECOVERY_SUBTYPES AND json_schema is provided,
+        recovery should be attempted before raising an error. The is_error
+        flag alone should not prevent structured output recovery.
         """
-        from claudecode_model.exceptions import CLIExecutionError
-
         model = ClaudeCodeModel()
         messages: list[ModelMessage] = [
             ModelRequest(parts=[UserPromptPart(content="Hello")])
         ]
 
-        json_schema = {
+        json_schema: dict[str, JsonValue] = {
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
@@ -1776,19 +1776,7 @@ class TestErrorDuringExecutionRecovery:
             "required": ["name"],
         }
 
-        params = ModelRequestParameters(
-            function_tools=[],
-            allow_text_output=True,
-            output_mode="native",
-            output_object=OutputObjectDefinition(
-                json_schema=json_schema,
-                name="TestOutput",
-                description="Test output",
-                strict=True,
-            ),
-        )
-
-        # is_error=True means SDK reported a hard error, not a recovery candidate
+        # is_error=True but result has recoverable parameters wrapper
         error_result = create_mock_result_message(
             result='{"parameters": {"name": "test"}}',
             subtype="error_during_execution",
@@ -1796,14 +1784,58 @@ class TestErrorDuringExecutionRecovery:
             structured_output=None,
         )
 
-        async def mock_query(
-            prompt: str, options: ClaudeAgentOptions
-        ) -> AsyncIterator[ResultMessage]:
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
             yield error_result
 
         with patch("claudecode_model.model.query", mock_query):
-            with pytest.raises(CLIExecutionError):
-                await model.request(messages, None, params)
+            cli_response = await model._execute_request(
+                messages, None, json_schema=json_schema
+            )
+
+        # Recovery should succeed - unwrap parameters wrapper
+        assert cli_response.structured_output == {"name": "test"}
+
+    @pytest.mark.asyncio
+    async def test_is_error_true_with_recovery_subtype_falls_through_to_error(
+        self,
+    ) -> None:
+        """Should raise StructuredOutputError when is_error=True, recovery subtype, but recovery fails.
+
+        When recovery is attempted but fails (no recoverable data),
+        StructuredOutputError should be raised instead of CLIExecutionError.
+        """
+        from claudecode_model.exceptions import StructuredOutputError
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema: dict[str, JsonValue] = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+
+        # is_error=True, recovery subtype, but no recoverable data
+        error_result = create_mock_result_message(
+            result="",
+            subtype="error_during_execution",
+            is_error=True,
+            structured_output=None,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(StructuredOutputError) as exc_info:
+                await model._execute_request(messages, None, json_schema=json_schema)
+
+        assert "recovery failed" in str(exc_info.value).lower()
+        assert "error_during_execution" in str(exc_info.value)
 
 
 class TestResultMessageLoopTermination:

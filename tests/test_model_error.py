@@ -77,6 +77,67 @@ class TestClaudeCodeModelIsErrorHandling:
         assert "Unknown error" in str(exc_info.value)
         assert exc_info.value.recoverable is True
 
+    @pytest.mark.asyncio
+    async def test_is_error_message_includes_diagnostic_info(self) -> None:
+        """CLIExecutionError should include subtype, session_id, num_turns, duration_ms."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error_during_execution",
+            duration_ms=5000,
+            duration_api_ms=4500,
+            is_error=True,
+            num_turns=3,
+            session_id="diag-session-abc",
+            result=None,
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        error_msg = str(exc_info.value)
+        assert "subtype=error_during_execution" in error_msg
+        assert "session_id=diag-session-abc" in error_msg
+        assert "num_turns=3" in error_msg
+        assert "duration_ms=5000" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_is_error_message_includes_diagnostic_info_with_result(self) -> None:
+        """CLIExecutionError with non-empty result should still include diagnostic info."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Test")])
+        ]
+
+        error_result = ResultMessage(
+            subtype="error",
+            duration_ms=2000,
+            duration_api_ms=1800,
+            is_error=True,
+            num_turns=1,
+            session_id="diag-session-xyz",
+            result="Rate limit exceeded",
+        )
+
+        async def mock_query(**kwargs: object) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                await model._execute_request(messages, None)
+
+        error_msg = str(exc_info.value)
+        assert "Rate limit exceeded" in error_msg
+        assert "subtype=error" in error_msg
+        assert "session_id=diag-session-xyz" in error_msg
+
 
 class TestClaudeCodeModelSDKExceptionHandling:
     """Tests for SDK exception handling in _execute_sdk_query."""
