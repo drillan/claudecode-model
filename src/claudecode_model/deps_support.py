@@ -25,7 +25,7 @@ import json
 import logging
 from dataclasses import asdict, fields, is_dataclass
 from types import UnionType
-from typing import Generic, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Union, get_args, get_origin, get_type_hints
 
 from dacite import from_dict
 from pydantic import BaseModel
@@ -36,8 +36,6 @@ from claudecode_model.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 # Primitive types that are directly JSON serializable
 _PRIMITIVE_TYPES: tuple[type, ...] = (str, int, float, bool, type(None))
@@ -197,7 +195,7 @@ def is_instance_serializable(obj: object) -> bool:
     if isinstance(obj, _PRIMITIVE_TYPES):
         return True
 
-    if isinstance(obj, (dict, list)):
+    if isinstance(obj, dict | list):
         return True
 
     if isinstance(obj, BaseModel):
@@ -209,7 +207,7 @@ def is_instance_serializable(obj: object) -> bool:
     return False
 
 
-def deserialize_deps(json_str: str, deps_type: type[T]) -> T:
+def deserialize_deps[T](json_str: str, deps_type: type[T]) -> T:
     """Deserialize JSON string to dependency object.
 
     Args:
@@ -244,7 +242,7 @@ def deserialize_deps(json_str: str, deps_type: type[T]) -> T:
     return data  # type: ignore[return-value]
 
 
-class DepsContext(Generic[T]):
+class DepsContext[T]:
     """Lightweight context for providing dependencies to tools.
 
     This class provides a simplified interface similar to pydantic-ai's
@@ -293,7 +291,7 @@ class DepsContext(Generic[T]):
         return self._deps
 
 
-def create_deps_context(deps: T) -> DepsContext[T]:
+def create_deps_context[T](deps: T) -> DepsContext[T]:
     """Create a DepsContext with the given dependencies.
 
     Args:

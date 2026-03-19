@@ -39,7 +39,7 @@ def _safe_int(value: JsonValue, default: int = 0, *, field_name: str = "") -> in
     if isinstance(value, bool):
         # bool is subclass of int, but we want to treat True/False as 1/0
         return 1 if value else 0
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return int(value)
     if isinstance(value, str):
         try:

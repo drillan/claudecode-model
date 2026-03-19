@@ -241,7 +241,7 @@ class TestGracefulTerminationConstants:
         """GRACEFUL_TERMINATION_TIMEOUT_SECONDS should be defined."""
         from claudecode_model.cli import GRACEFUL_TERMINATION_TIMEOUT_SECONDS
 
-        assert isinstance(GRACEFUL_TERMINATION_TIMEOUT_SECONDS, (int, float))
+        assert isinstance(GRACEFUL_TERMINATION_TIMEOUT_SECONDS, int | float)
         assert GRACEFUL_TERMINATION_TIMEOUT_SECONDS > 0
 
     def test_graceful_termination_timeout_value(self) -> None:
