@@ -383,7 +383,7 @@ class ClaudeCodeModel(Model):
 
         timeout_value = model_settings.get("timeout")
         if timeout_value is not None:
-            if isinstance(timeout_value, (int, float)):
+            if isinstance(timeout_value, int | float):
                 timeout = float(timeout_value)
             else:
                 logger.warning(
@@ -394,7 +394,7 @@ class ClaudeCodeModel(Model):
 
         max_budget_value = model_settings.get("max_budget_usd")
         if max_budget_value is not None:
-            if isinstance(max_budget_value, (int, float)):
+            if isinstance(max_budget_value, int | float):
                 max_budget_usd = float(max_budget_value)
                 if max_budget_usd < 0:
                     raise ValueError("max_budget_usd must be non-negative")

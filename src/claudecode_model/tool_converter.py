@@ -15,14 +15,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Literal, TypedDict, TypeVar
+from typing import Literal, TypedDict
 
 from claude_agent_sdk import SdkMcpTool
 from pydantic_ai.tools import Tool
 
 from claudecode_model.deps_support import DepsContext, create_deps_context
-
-T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +86,7 @@ def _format_return_value_as_mcp(result: object) -> McpResponse:
         text = ""
     elif isinstance(result, str):
         text = result
-    elif isinstance(result, (dict, list)):
+    elif isinstance(result, dict | list):
         text = json.dumps(result)
     else:
         text = str(result)
@@ -194,7 +192,7 @@ def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
     )
 
 
-def convert_tool_with_deps(tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
+def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
     """Convert a pydantic-ai Tool with dependencies to SdkMcpTool (experimental).
 
     This function enables tools that use RunContext to access serializable
