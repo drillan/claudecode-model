@@ -846,14 +846,58 @@ class ClaudeCodeModel(Model):
                     type(query_generator).__qualname__,
                 )
 
+    @staticmethod
+    def _try_parse_json_string_as_dict(
+        value: str, wrapper_key: str
+    ) -> dict[str, JsonValue] | None:
+        """Try to parse a JSON string wrapper value as a dict.
+
+        When the model wraps structured output in a parameters/output envelope,
+        the value may be a JSON string instead of a dict. This method attempts
+        to parse the string as JSON and returns the result if it's a dict.
+
+        Args:
+            value: The string value to parse as JSON.
+            wrapper_key: The wrapper key name (for logging).
+
+        Returns:
+            Parsed dict if the string is valid JSON representing a dict,
+            None otherwise.
+        """
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            logger.debug(
+                "Wrapper key '%s' has string value that is not valid JSON",
+                wrapper_key,
+            )
+            return None
+
+        if not isinstance(parsed, dict):
+            logger.debug(
+                "Wrapper key '%s' has JSON string value but parsed result "
+                "is not a dict: type=%s",
+                wrapper_key,
+                type(parsed).__name__,
+            )
+            return None
+
+        logger.info(
+            "Parsed JSON string wrapper value for key '%s' as dict",
+            wrapper_key,
+        )
+        return parsed
+
     def _try_unwrap_parameters_wrapper(
         self, result: ResultMessage
     ) -> dict[str, JsonValue] | None:
-        """Try to unwrap {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} format.
+        """Try to unwrap {"parameters": ...}, {"parameter": ...}, or {"output": ...} format.
 
         Some models wrap structured output in a parameters or output envelope.
         This method detects and unwraps this format when structured_output is
         not already set. Supports "parameters", "parameter", and "output" keys.
+        Wrapper values may be dicts or JSON-encoded strings; strings are parsed
+        via json.loads().
 
         Args:
             result: ResultMessage from Claude Agent SDK.
@@ -881,7 +925,7 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} format (single key)
+        # Check for {"parameters": <dict or JSON string>}, {"parameter": ...}, or {"output": ...} (single key)
         if not isinstance(parsed, dict):
             return None
 
@@ -896,7 +940,14 @@ class ClaudeCodeModel(Model):
             return None
 
         wrapper_value = parsed[wrapper_key]
-        if not isinstance(wrapper_value, dict):
+        if isinstance(wrapper_value, str):
+            parsed_dict = self._try_parse_json_string_as_dict(
+                wrapper_value, wrapper_key
+            )
+            if parsed_dict is None:
+                return None
+            wrapper_value = parsed_dict
+        elif not isinstance(wrapper_value, dict):
             return None
 
         # Log info about automatic unwrapping
@@ -919,7 +970,8 @@ class ClaudeCodeModel(Model):
         When a structured output recovery subtype occurs and result.result is empty,
         we can still recover by extracting the structured output from the ToolUseBlock
         input captured from AssistantMessage during the query. Supports
-        "parameters", "parameter", and "output" wrapper keys.
+        "parameters", "parameter", and "output" wrapper keys. Wrapper values
+        may be dicts or JSON-encoded strings; strings are parsed via json.loads().
 
         Args:
             captured_input: The captured StructuredOutput tool input dict.
@@ -938,32 +990,28 @@ class ClaudeCodeModel(Model):
             )
             return None
 
-        # Check for {"parameters": {...}}, {"parameter": {...}}, or {"output": {...}} wrapper
+        # Check for {"parameters": <dict or JSON string>}, {"parameter": ...},
+        # or {"output": ...} wrapper (single key)
         keys = list(captured_input.keys())
-        if keys == ["parameters"]:
-            wrapper_value = captured_input["parameters"]
+        wrapper_key: str | None = None
+        for candidate in ("parameters", "parameter", "output"):
+            if keys == [candidate]:
+                wrapper_key = candidate
+                break
+
+        if wrapper_key is not None:
+            wrapper_value = captured_input[wrapper_key]
             if isinstance(wrapper_value, dict):
                 return wrapper_value
+            if isinstance(wrapper_value, str):
+                parsed_dict = self._try_parse_json_string_as_dict(
+                    wrapper_value, wrapper_key
+                )
+                if parsed_dict is not None:
+                    return parsed_dict
             logger.debug(
-                "Wrapper key 'parameters' found but value is not a dict: type=%s",
-                type(wrapper_value).__name__,
-            )
-            return None
-        elif keys == ["parameter"]:
-            wrapper_value = captured_input["parameter"]
-            if isinstance(wrapper_value, dict):
-                return wrapper_value
-            logger.debug(
-                "Wrapper key 'parameter' found but value is not a dict: type=%s",
-                type(wrapper_value).__name__,
-            )
-            return None
-        elif keys == ["output"]:
-            wrapper_value = captured_input["output"]
-            if isinstance(wrapper_value, dict):
-                return wrapper_value
-            logger.debug(
-                "Wrapper key 'output' found but value is not a dict: type=%s",
+                "Wrapper key '%s' found but value is not a dict: type=%s",
+                wrapper_key,
                 type(wrapper_value).__name__,
             )
             return None
