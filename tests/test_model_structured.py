@@ -649,6 +649,68 @@ class TestParametersWrapperUnwrap:
         assert len(caplog.records) == 1
         assert "wrapper_key=output" in caplog.records[0].message
 
+    # --- JSON string wrapper value tests ---
+
+    def test_unwraps_parameters_string_value_as_json(self) -> None:
+        """Should parse JSON string in 'parameters' wrapper value as dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": "{\\"name\\": \\"test\\", \\"score\\": 95}"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"name": "test", "score": 95}
+
+    def test_unwraps_parameter_singular_string_value_as_json(self) -> None:
+        """Should parse JSON string in 'parameter' wrapper value as dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameter": "{\\"name\\": \\"test\\"}"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"name": "test"}
+
+    def test_unwraps_output_string_value_as_json(self) -> None:
+        """Should parse JSON string in 'output' wrapper value as dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"output": "{\\"is_complete\\": false, \\"summary\\": \\"test\\"}"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped == {"is_complete": False, "summary": "test"}
+
+    def test_does_not_unwrap_invalid_json_string(self) -> None:
+        """Should NOT unwrap when wrapper value is a non-JSON string."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": "not valid json"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
+    def test_does_not_unwrap_json_string_that_is_not_dict(self) -> None:
+        """Should NOT unwrap when wrapper value is a JSON string that parses to non-dict."""
+        model = ClaudeCodeModel()
+        result_message = create_mock_result_message(
+            result='{"parameters": "[1, 2, 3]"}',
+            structured_output=None,
+        )
+
+        unwrapped = model._try_unwrap_parameters_wrapper(result_message)
+
+        assert unwrapped is None
+
 
 RECOVERY_SUBTYPES: list[str] = [
     "error_max_structured_output_retries",
@@ -833,6 +895,117 @@ class TestStructuredOutputRecoveryParameterized:
             content = response.parts[0].content  # type: ignore[union-attr]
             parsed = json.loads(content)  # type: ignore[arg-type]
             assert parsed == {"name": "captured-test"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subtype", RECOVERY_SUBTYPES)
+    async def test_recovers_with_parameters_string_wrapper(self, subtype: str) -> None:
+        """Should recover when result has JSON string in parameters wrapper."""
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "required": ["name", "score"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        error_result = create_mock_result_message(
+            result='{"parameters": "{\\"name\\": \\"test\\", \\"score\\": 95}"}',
+            subtype=subtype,
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "test", "score": 95}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subtype", RECOVERY_SUBTYPES)
+    async def test_recovers_with_captured_tool_input_string_wrapper(
+        self, subtype: str
+    ) -> None:
+        """Should recover when captured ToolUseBlock has JSON string in output wrapper."""
+        from claude_agent_sdk.types import AssistantMessage, ToolUseBlock
+
+        model = ClaudeCodeModel()
+        messages: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content="Hello")])
+        ]
+
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+            },
+            "required": ["name"],
+        }
+
+        params = ModelRequestParameters(
+            function_tools=[],
+            allow_text_output=True,
+            output_mode="native",
+            output_object=OutputObjectDefinition(
+                json_schema=json_schema,
+                name="TestOutput",
+                description="Test output",
+                strict=True,
+            ),
+        )
+
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(
+                    id="tool-string-wrapped",
+                    name="StructuredOutput",
+                    input={"output": '{"name": "string-wrapped"}'},
+                )
+            ],
+            model="claude-sonnet-4-20250514",
+        )
+
+        error_result = create_mock_result_message(
+            result="",
+            subtype=subtype,
+            structured_output=None,
+        )
+
+        async def mock_query(
+            prompt: str, options: ClaudeAgentOptions
+        ) -> AsyncIterator[ResultMessage]:
+            yield assistant_msg  # type: ignore[misc]
+            yield error_result
+
+        with patch("claudecode_model.model.query", mock_query):
+            response = await model.request(messages, None, params)
+
+            content = response.parts[0].content  # type: ignore[union-attr]
+            parsed = json.loads(content)  # type: ignore[arg-type]
+            assert parsed == {"name": "string-wrapped"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("subtype", RECOVERY_SUBTYPES)
