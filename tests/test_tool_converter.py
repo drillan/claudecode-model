@@ -15,6 +15,8 @@ from claude_agent_sdk import SdkMcpTool
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 
+from .conftest import get_agent_tools
+
 from claudecode_model.tool_converter import JsonSchema
 
 
@@ -68,7 +70,7 @@ class TestConvertToolToSdkMcpTool:
             """A tool with no arguments."""
             return "result"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -88,7 +90,7 @@ class TestConvertToolToSdkMcpTool:
             """Greet someone."""
             return f"Hello, {name}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -109,7 +111,7 @@ class TestConvertToolToSdkMcpTool:
             """Calculate result of operation."""
             return a + b
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -132,7 +134,7 @@ class TestConvertToolToSdkMcpTool:
             """Description."""
             return x
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -150,7 +152,7 @@ class TestConvertToolToSdkMcpTool:
             """This is a detailed description of what the tool does."""
             return x
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -170,7 +172,7 @@ class TestConvertToolToSdkMcpTool:
         def no_doc_tool(x: str) -> str:
             return x
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -193,7 +195,7 @@ class TestSchemaConversion:
             """Simple tool."""
             return name
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -214,7 +216,7 @@ class TestSchemaConversion:
             """Tool with required arg."""
             return required_arg
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -234,7 +236,7 @@ class TestSchemaConversion:
             """Tool with optional arg."""
             return required
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -255,7 +257,7 @@ class TestSchemaConversion:
             """Tool with default value."""
             return name
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -279,7 +281,7 @@ class TestHandlerWrapping:
             """Sync tool."""
             return f"received: {msg}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -298,7 +300,7 @@ class TestHandlerWrapping:
             """Async tool."""
             return f"received: {msg}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -320,7 +322,7 @@ class TestHandlerWrapping:
             received_args["days"] = days
             return "ok"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -341,7 +343,7 @@ class TestHandlerWrapping:
             """Simple."""
             return "result text"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -430,7 +432,7 @@ class TestErrorHandling:
             """Tool that takes context."""
             return x
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         with pytest.raises(
@@ -449,7 +451,7 @@ class TestErrorHandling:
             """Always fails."""
             raise ValueError("intentional error")
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         result = convert_tool(tool)
@@ -476,7 +478,7 @@ class TestConvertToolsToMcpServer:
             """Tool 1."""
             return x
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
 
         result = convert_tools_to_mcp_server(
             tools, server_name="test-server", server_version="1.0.0"
@@ -509,7 +511,7 @@ class TestConvertToolsToMcpServer:
             """Tool C."""
             return z
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
 
         result = convert_tools_to_mcp_server(
             tools, server_name="multi-server", server_version="1.0.0"
@@ -570,7 +572,7 @@ class TestSerializableDepsSupport:
             received_deps["timeout"] = ctx.deps.timeout
             return f"Fetched: {query}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         deps = _DictDeps(api_url="https://api.example.com", timeout=30)
@@ -602,7 +604,7 @@ class TestSerializableDepsSupport:
             received_config["api_key"] = ctx.deps.api_key
             return f"Called: {endpoint}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         config = _ApiConfig(base_url="https://api.example.com", api_key="secret123")
@@ -628,7 +630,7 @@ class TestSerializableDepsSupport:
             """Use HTTP client."""
             return url
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         client = httpx.AsyncClient()
@@ -649,7 +651,7 @@ class TestSerializableDepsSupport:
             """Tool with ctx and args."""
             return f"{name}: {count}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         deps = _MyDeps(value="test")
@@ -683,7 +685,7 @@ class TestSerializableDepsSupport:
             received_deps["timeout"] = ctx.deps.timeout
             return f"Async Fetched: {query}"
 
-        tools = list(agent._function_toolset.tools.values())
+        tools = get_agent_tools(agent)
         tool = tools[0]
 
         deps = _DictDeps(api_url="https://async.example.com", timeout=60)

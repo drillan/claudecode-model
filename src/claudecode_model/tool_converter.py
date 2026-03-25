@@ -1,8 +1,8 @@
 """Convert pydantic-ai Tools to Claude Agent SDK MCP format.
 
 Note:
-    This module uses pydantic-ai internal APIs (agent._function_toolset)
-    that may change in future versions.
+    Use ``agent.toolsets[0]`` (public API) to access the agent's
+    ``FunctionToolset``, then ``.tools`` to get individual ``Tool`` objects.
 
 Warning:
     Serializable dependency support (convert_tool_with_deps) is experimental.
@@ -151,7 +151,7 @@ def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
     """Convert a pydantic-ai Tool to SdkMcpTool.
 
     Args:
-        tool: A pydantic-ai Tool object from agent._function_toolset.tools.
+        tool: A pydantic-ai Tool object from agent's FunctionToolset.
 
     Returns:
         An SdkMcpTool that can be used with Claude Agent SDK.
@@ -160,16 +160,16 @@ def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
         TypeError: If the input is not a Tool instance.
         NotImplementedError: If the tool uses takes_ctx=True.
 
-    Note:
-        This function uses pydantic-ai internal APIs that may change.
-
     Examples:
         >>> from pydantic_ai import Agent
+        >>> from pydantic_ai.toolsets.function import FunctionToolset
         >>> agent = Agent("test")
         >>> @agent.tool_plain
         ... def get_weather(city: str) -> str:
         ...     return f"Weather in {city}"
-        >>> tools = list(agent._function_toolset.tools.values())
+        >>> toolset = agent.toolsets[0]
+        >>> assert isinstance(toolset, FunctionToolset)
+        >>> tools = list(toolset.tools.values())
         >>> sdk_tool = convert_tool(tools[0])
         >>> sdk_tool.name
         'get_weather'
@@ -224,6 +224,7 @@ def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
 
     Examples:
         >>> from pydantic_ai import Agent, RunContext
+        >>> from pydantic_ai.toolsets.function import FunctionToolset
         >>> from dataclasses import dataclass
         >>> @dataclass
         ... class Config:
@@ -232,7 +233,9 @@ def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
         >>> @agent.tool
         ... def call_api(ctx: RunContext[Config], endpoint: str) -> str:
         ...     return f"Called {endpoint} with key {ctx.deps.api_key}"
-        >>> tools = list(agent._function_toolset.tools.values())
+        >>> toolset = agent.toolsets[0]
+        >>> assert isinstance(toolset, FunctionToolset)
+        >>> tools = list(toolset.tools.values())
         >>> config = Config(api_key="secret")
         >>> sdk_tool = convert_tool_with_deps(tools[0], config)
     """
@@ -278,16 +281,16 @@ def convert_tools_to_mcp_server(
     Returns:
         McpServerConfig containing name, version, and converted tools.
 
-    Note:
-        This function uses pydantic-ai internal APIs that may change.
-
     Examples:
         >>> from pydantic_ai import Agent
+        >>> from pydantic_ai.toolsets.function import FunctionToolset
         >>> agent = Agent("test")
         >>> @agent.tool_plain
         ... def get_weather(city: str) -> str:
         ...     return f"Weather in {city}"
-        >>> tools = list(agent._function_toolset.tools.values())
+        >>> toolset = agent.toolsets[0]
+        >>> assert isinstance(toolset, FunctionToolset)
+        >>> tools = list(toolset.tools.values())
         >>> config = convert_tools_to_mcp_server(
         ...     tools, server_name="my-server", server_version="1.0.0"
         ... )

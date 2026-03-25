@@ -20,7 +20,7 @@ model = ClaudeCodeModel()
 agent = Agent(model, tools=[my_tool_func])
 
 # 3. ツールセット登録（transport はデフォルトで "auto" = IPC ブリッジ使用）
-model.set_agent_toolsets(agent._function_toolset)
+model.set_agent_toolsets(agent.toolsets[0])  # type: ignore[arg-type]
 
 # 4. 実行（IPC サーバーは自動で起動・停止される）
 result = await agent.run("Execute the tool")

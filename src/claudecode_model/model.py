@@ -1507,7 +1507,7 @@ class ClaudeCodeModel(Model):
 
         Args:
             toolsets: Sequence of pydantic-ai tool objects, an AgentToolset
-                (e.g., agent._function_toolset), or None.
+                (e.g., ``agent.toolsets[0]``), or None.
             server_name: MCP server name used as prefix in
                 ``mcp__<server_name>__<tool_name>``.
                 Defaults to ``MCP_SERVER_NAME`` (``"pydantic_tools"``).

@@ -106,7 +106,7 @@ class ToolsetNotRegisteredError(ClaudeCodeError):
         message = (
             f"function_tools provided ({', '.join(requested_tools)}) "
             "but no toolsets are registered. "
-            "Call model.set_agent_toolsets(agent._function_toolset) "
+            "Call model.set_agent_toolsets(agent.toolsets[0]) "
             "after creating the Agent to enable tool support."
         )
         super().__init__(message)
@@ -128,7 +128,7 @@ class ToolNotFoundError(ClaudeCodeError):
         message = (
             f"Tools not found in registered toolsets: {', '.join(missing_tools)}. "
             f"Available tools: {', '.join(available_tools) if available_tools else 'none'}. "
-            "Make sure to call model.set_agent_toolsets(agent._function_toolset) "
+            "Make sure to call model.set_agent_toolsets(agent.toolsets[0]) "
             "after registering tools with @agent.tool or @agent.tool_plain."
         )
         super().__init__(message)

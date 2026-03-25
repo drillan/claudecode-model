@@ -47,10 +47,10 @@ class PydanticAITool(Protocol):
 
 @runtime_checkable
 class AgentToolset(Protocol):
-    """Protocol for pydantic-ai Agent toolset (e.g., _AgentFunctionToolset).
+    """Protocol for pydantic-ai Agent toolset (e.g., FunctionToolset).
 
-    This protocol matches pydantic-ai's internal _AgentFunctionToolset structure,
-    allowing direct use of agent._function_toolset without extracting tools.
+    This protocol matches pydantic-ai's FunctionToolset structure,
+    allowing direct use of ``agent.toolsets[0]`` without extracting tools.
 
     Attributes:
         tools: Dictionary mapping tool names to PydanticAITool objects.

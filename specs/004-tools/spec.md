@@ -15,11 +15,11 @@
 
 **Why this priority**: ツール連携はエージェントアプリケーションの根幹機能。pydantic-ai のツールエコシステムと Claude Agent SDK を橋渡しする唯一の手段であり、この機能なしにはツール使用が不可能。
 
-**Independent Test**: pydantic-ai Agent にツールを登録し、`set_agent_toolsets(agent._function_toolset)` を呼び出して `McpSdkServerConfig` が生成されることを確認する。
+**Independent Test**: pydantic-ai Agent にツールを登録し、`set_agent_toolsets(agent.toolsets[0])` を呼び出して `McpSdkServerConfig` が生成されることを確認する。
 
 **Acceptance Scenarios**:
 
-1. **Given** `@agent.tool_plain` で定義されたツールを持つ Agent, **When** `set_agent_toolsets(agent._function_toolset)` を呼び出す, **Then** ツールが `SdkMcpTool` に変換され `McpSdkServerConfig` が生成される
+1. **Given** `@agent.tool_plain` で定義されたツールを持つ Agent, **When** `set_agent_toolsets(agent.toolsets[0])` を呼び出す, **Then** ツールが `SdkMcpTool` に変換され `McpSdkServerConfig` が生成される
 2. **Given** 複数ツールを持つ `AgentToolset`, **When** `create_mcp_server_from_tools()` を呼び出す, **Then** 全ツールが `mcp__pydantic_tools__<tool_name>` 形式で公開される
 3. **Given** ツール実行時に Claude がツールを呼び出した場合, **When** ツールラッパーが呼ばれる, **Then** 元のツール関数が実行され結果が MCP レスポンス形式（`{content: [{type: "text", text: ...}]}`）で返される
 4. **Given** ツール実行中に例外が発生した場合, **When** ラッパーがエラーをキャッチする, **Then** 例外がログ記録された後に再送出される（`mcp_integration.py`）またはエラーレスポンス（`isError: true`）として返される（`tool_converter.py`）
@@ -109,7 +109,7 @@
 
 ### Functional Requirements
 
-- **FR-001**: システムは pydantic-ai の `AgentToolset`（`agent._function_toolset`）から `SdkMcpTool` のリストを抽出・変換しなければならない
+- **FR-001**: システムは pydantic-ai の `AgentToolset`（`agent.toolsets[0]`）から `SdkMcpTool` のリストを抽出・変換しなければならない
 - **FR-002**: システムは変換されたツールを `McpSdkServerConfig` としてパッケージし、`ClaudeAgentOptions.mcp_servers` に渡せる形式にしなければならない
 - **FR-003**: システムは pydantic-ai の `Tool` オブジェクトを個別に `SdkMcpTool` に変換する低レベル API（`convert_tool()`）を提供しなければならない
 - **FR-004**: システムはツールの JSON Schema を3つのアクセスパターン（`parameters_json_schema`, `function_schema.json_schema`, `tool_def.parameters_json_schema`）から抽出しなければならない

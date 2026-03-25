@@ -199,8 +199,12 @@ def example_tool_with_deps() -> None:
         config = ctx.deps
         return f"Called {config.base_url}/{endpoint} (timeout={config.timeout}s)"
 
-    # Get the tool from agent's internal toolset
-    tools = list(agent._function_toolset.tools.values())
+    # Get the tool from agent's toolset (public API)
+    from pydantic_ai.toolsets.function import FunctionToolset
+
+    toolset = agent.toolsets[0]
+    assert isinstance(toolset, FunctionToolset)
+    tools = list(toolset.tools.values())
     print(f"Found {len(tools)} tool(s)")
 
     if tools:

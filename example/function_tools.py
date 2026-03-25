@@ -12,13 +12,9 @@ Usage:
     python example/function_tools.py
 """
 
-from collections.abc import Sequence
-from typing import cast
-
 from pydantic_ai import Agent
 
 from claudecode_model import ClaudeCodeModel
-from claudecode_model.mcp_integration import PydanticAITool
 
 
 def main() -> None:
@@ -102,10 +98,7 @@ def main() -> None:
 
     # Register tools with the model's MCP server
     # This is required for Claude to be able to call the tools
-    # Cast is needed because pydantic-ai Tool[Any] is structurally compatible
-    # with PydanticAITool protocol but mypy can't infer this automatically
-    tools = cast(Sequence[PydanticAITool], list(agent._function_toolset.tools.values()))
-    model.set_agent_toolsets(tools)
+    model.set_agent_toolsets(agent.toolsets[0])  # type: ignore[arg-type]
 
     # Run the agent with a prompt that will use the tools
     print("Running agent with function tools...")
