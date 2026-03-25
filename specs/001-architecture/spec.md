@@ -30,7 +30,7 @@
 
 **Why this priority**: ツール連携なしでは単純なテキスト応答のみとなり、エージェントとしての価値が大幅に制限される。
 
-**Independent Test**: `@agent.tool_plain` でツールを定義し、`model.set_agent_toolsets(agent._function_toolset)` を呼び出した後、ツール呼び出しを含むプロンプトでツールが実行される。
+**Independent Test**: `@agent.tool_plain` でツールを定義し、`model.set_agent_toolsets(agent.toolsets[0])` を呼び出した後、ツール呼び出しを含むプロンプトでツールが実行される。
 
 **Acceptance Scenarios**:
 

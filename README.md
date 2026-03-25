@@ -157,8 +157,11 @@ def call_api(ctx: RunContext[ApiConfig], endpoint: str) -> str:
 # Create config and convert tool with dependencies
 config = ApiConfig(base_url="https://api.example.com", api_key="secret-key-123")
 
-# Get tool from agent's internal toolset
-tools = list(agent._function_toolset.tools.values())
+# Get tool from agent's toolset (public API)
+from pydantic_ai.toolsets.function import FunctionToolset
+toolset = agent.toolsets[0]
+assert isinstance(toolset, FunctionToolset)
+tools = list(toolset.tools.values())
 sdk_tool = convert_tool_with_deps(tools[0], config)
 
 # Use the converted tool with Claude Agent SDK
@@ -329,7 +332,7 @@ Parameters not present in the tool call are not checked — only explicit violat
 
 1. **`@agent.tool` with `takes_ctx=True`**: Only supported with serializable dependencies. Use `@agent.tool_plain` for tools without context.
 
-2. **Internal API Usage**: Tool conversion uses pydantic-ai internal APIs (`agent._function_toolset`) that may change in future versions.
+2. **Toolset Access**: Tool conversion uses ``agent.toolsets[0]`` (public API) to access the agent's ``FunctionToolset``.
 
 3. **Async Tools**: Both sync and async tools are supported.
 
