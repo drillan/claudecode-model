@@ -332,7 +332,7 @@ Parameters not present in the tool call are not checked — only explicit violat
 
 1. **`@agent.tool` with `takes_ctx=True`**: Only supported with serializable dependencies. Use `@agent.tool_plain` for tools without context.
 
-2. **Toolset Access**: Tool conversion uses ``agent.toolsets[0]`` (public API) to access the agent's ``FunctionToolset``.
+2. **Toolset Access**: Tool conversion uses ``agent.toolsets[0]`` (public API) to access the agent's ``FunctionToolset``. Note that the ``.tools`` attribute is specific to ``FunctionToolset`` and is not part of pydantic-ai's ``AbstractToolset`` interface.
 
 3. **Async Tools**: Both sync and async tools are supported.
 
