@@ -177,7 +177,6 @@ ToolWrapperFunc = Callable[
 
 
 def create_tool_wrapper(
-    tool_name: str,
     original_function: Callable[..., Coroutine[object, object, object]],
 ) -> ToolWrapperFunc:
     """Create an async wrapper function for a pydantic-ai tool.
@@ -190,7 +189,6 @@ def create_tool_wrapper(
     (e.g., IPCServer._dispatch) which handles logging and error responses.
 
     Args:
-        tool_name: Name of the tool (used for identification).
         original_function: The async function to wrap.
 
     Returns:
@@ -226,7 +224,7 @@ def convert_tool_definition(tool_def: ToolDefinition) -> SdkMcpTool[dict[str, ob
             "Each tool must have a callable function."
         )
 
-    wrapper = create_tool_wrapper(tool_name, original_function)
+    wrapper = create_tool_wrapper(original_function)
 
     return tool(tool_name, tool_def["description"], tool_def["input_schema"])(wrapper)
 
