@@ -450,10 +450,10 @@ class TestCreateToolWrapper:
         assert result == {"content": [{"type": "text", "text": "Result: 2+2"}]}
 
     @pytest.mark.asyncio
-    async def test_wrapper_handles_exception_with_logging(
+    async def test_wrapper_propagates_exception_without_logging(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Should log error when original function raises exception."""
+        """Should propagate exception without logging (logging is handled by caller)."""
 
         async def failing_func(**kwargs: object) -> str:
             raise ValueError("Test error")
@@ -464,8 +464,8 @@ class TestCreateToolWrapper:
             with pytest.raises(ValueError, match="Test error"):
                 await wrapper({})
 
-        assert "failing_tool" in caplog.text
-        assert "execution failed" in caplog.text
+        assert "failing_tool" not in caplog.text
+        assert "execution failed" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_wrapper_returns_mcp_format_response(self) -> None:

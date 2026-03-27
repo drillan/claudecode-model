@@ -185,10 +185,12 @@ def create_tool_wrapper(
     This function creates a wrapper that:
     1. Calls the original function with provided arguments
     2. Formats the result in MCP-compatible format
-    3. Logs and re-raises any exceptions
+
+    Exceptions are not caught here; they propagate to the caller
+    (e.g., IPCServer._dispatch) which handles logging and error responses.
 
     Args:
-        tool_name: Name of the tool (used for logging).
+        tool_name: Name of the tool (used for identification).
         original_function: The async function to wrap.
 
     Returns:
@@ -197,17 +199,8 @@ def create_tool_wrapper(
 
     async def wrapper(args: dict[str, object]) -> dict[str, object]:
         """Wrapper that delegates to original pydantic-ai tool function."""
-        try:
-            result = await original_function(**args)
-            return {"content": [{"type": "text", "text": str(result)}]}
-        except Exception as e:
-            logger.error(
-                "Tool '%s' execution failed: %s",
-                tool_name,
-                str(e),
-                exc_info=True,
-            )
-            raise
+        result = await original_function(**args)
+        return {"content": [{"type": "text", "text": str(result)}]}
 
     return wrapper
 
