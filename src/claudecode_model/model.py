@@ -1593,7 +1593,7 @@ class ClaudeCodeModel(Model):
             name = td["name"]
             original_fn = td.get("function")
             if original_fn is not None:
-                tool_handlers[name] = create_tool_wrapper(name, original_fn)
+                tool_handlers[name] = create_tool_wrapper(original_fn)
 
             tool_schemas.append(
                 {

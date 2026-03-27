@@ -443,29 +443,29 @@ class TestCreateToolWrapper:
             call_log.append(expression)
             return f"Result: {expression}"
 
-        wrapper = create_tool_wrapper("calculator", original_func)
+        wrapper = create_tool_wrapper(original_func)
         result = await wrapper({"expression": "2+2"})
 
         assert call_log == ["2+2"]
         assert result == {"content": [{"type": "text", "text": "Result: 2+2"}]}
 
     @pytest.mark.asyncio
-    async def test_wrapper_handles_exception_with_logging(
+    async def test_wrapper_propagates_exception_without_logging(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Should log error when original function raises exception."""
+        """Should propagate exception without logging (logging is handled by caller)."""
 
         async def failing_func(**kwargs: object) -> str:
             raise ValueError("Test error")
 
-        wrapper = create_tool_wrapper("failing_tool", failing_func)
+        wrapper = create_tool_wrapper(failing_func)
 
         with caplog.at_level(logging.ERROR):
             with pytest.raises(ValueError, match="Test error"):
                 await wrapper({})
 
-        assert "failing_tool" in caplog.text
-        assert "execution failed" in caplog.text
+        assert "failing_tool" not in caplog.text
+        assert "execution failed" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_wrapper_returns_mcp_format_response(self) -> None:
@@ -474,7 +474,7 @@ class TestCreateToolWrapper:
         async def simple_func() -> str:
             return "Hello, World!"
 
-        wrapper = create_tool_wrapper("greeter", simple_func)
+        wrapper = create_tool_wrapper(simple_func)
         result = await wrapper({})
 
         assert "content" in result
@@ -490,7 +490,7 @@ class TestCreateToolWrapper:
         async def number_func() -> int:
             return 42
 
-        wrapper = create_tool_wrapper("number_tool", number_func)
+        wrapper = create_tool_wrapper(number_func)
         result = await wrapper({})
 
         content = result["content"]
@@ -510,7 +510,7 @@ class TestCreateToolWrapper:
             received_args["c"] = c
             return "done"
 
-        wrapper = create_tool_wrapper("multi_arg", multi_arg_func)
+        wrapper = create_tool_wrapper(multi_arg_func)
         await wrapper({"a": 1, "b": "test", "c": True})
 
         assert received_args == {"a": 1, "b": "test", "c": True}
