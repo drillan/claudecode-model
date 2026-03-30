@@ -94,7 +94,7 @@ def _format_return_value_as_mcp(result: object) -> McpResponse:
     return McpResponse(content=[McpTextContent(type="text", text=text)])
 
 
-def _create_async_handler(
+def create_async_handler(
     func: Callable[..., object],
     takes_ctx: bool,
     deps_context: DepsContext[object] | None = None,
@@ -182,7 +182,7 @@ def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
     description = tool_def.description or ""
     input_schema = tool_def.parameters_json_schema
 
-    handler = _create_async_handler(tool.function, takes_ctx=tool.takes_ctx)
+    handler = create_async_handler(tool.function, takes_ctx=tool.takes_ctx)
 
     return SdkMcpTool(
         name=name,
@@ -253,7 +253,7 @@ def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
     # suppresses the assignment error from T -> object covariance mismatch.
     deps_context: DepsContext[object] = create_deps_context(deps)  # type: ignore[assignment]
 
-    handler = _create_async_handler(
+    handler = create_async_handler(
         tool.function, takes_ctx=tool.takes_ctx, deps_context=deps_context
     )
 

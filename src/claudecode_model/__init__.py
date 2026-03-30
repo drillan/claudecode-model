@@ -57,6 +57,7 @@ from claudecode_model.exceptions import (  # noqa: E402
     IPCError,
     IPCMessageSizeError,
     IPCToolExecutionError,
+    MissingDepsError,
     StructuredOutputError,
     ToolNotFoundError,
     ToolsetNotRegisteredError,
@@ -79,6 +80,7 @@ from claudecode_model.tool_converter import (  # noqa: E402
     convert_tool,
     convert_tool_with_deps,
     convert_tools_to_mcp_server,
+    create_async_handler,
 )
 from claudecode_model.types import (  # noqa: E402
     AsyncMessageCallback,
@@ -111,6 +113,7 @@ __all__ = [
     "StructuredOutputError",
     "UnsupportedDepsTypeError",
     "TypeHintResolutionError",
+    "MissingDepsError",
     "ToolsetNotRegisteredError",
     "ToolNotFoundError",
     "ErrorType",
@@ -131,6 +134,7 @@ __all__ = [
     "convert_tool",
     "convert_tool_with_deps",
     "convert_tools_to_mcp_server",
+    "create_async_handler",
     "JsonSchema",
     "McpResponse",
     "McpServerConfig",

@@ -71,6 +71,27 @@ class CLIResponseParseError(ClaudeCodeError):
         self.raw_output = raw_output
 
 
+class MissingDepsError(ClaudeCodeError):
+    """Raised when takes_ctx tools are registered without providing deps.
+
+    This error is raised when set_agent_toolsets() receives tools that
+    have takes_ctx=True but no deps parameter was provided.
+
+    Attributes:
+        tool_names: List of tool names that require deps.
+    """
+
+    def __init__(self, tool_names: list[str]) -> None:
+        message = (
+            f"Tools requiring RunContext found ({', '.join(tool_names)}) "
+            "but no deps were provided to set_agent_toolsets(). "
+            "Pass deps=<your_deps> to set_agent_toolsets() "
+            "or use @agent.tool_plain for tools without context."
+        )
+        super().__init__(message)
+        self.tool_names = tool_names
+
+
 class UnsupportedDepsTypeError(ClaudeCodeError):
     """Raised when a dependency type is not serializable.
 
