@@ -65,7 +65,7 @@ class ToolValidationError(ValueError):
     pass
 
 
-def _get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
+def get_parameters_json_schema(tool: object) -> dict[str, JsonValue]:
     """Get parameters JSON schema from various tool types.
 
     Supports multiple access patterns:
@@ -156,7 +156,7 @@ def extract_tools_from_toolsets(
         tool_def: ToolDefinition = {
             "name": t.name,
             "description": t.description,
-            "input_schema": _get_parameters_json_schema(t),
+            "input_schema": get_parameters_json_schema(t),
             "function": getattr(t, "function", None),
         }
         result.append(tool_def)

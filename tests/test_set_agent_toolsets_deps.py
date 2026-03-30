@@ -16,6 +16,7 @@ import httpx
 import pytest
 from pydantic_ai import Agent, RunContext
 
+from .conftest import get_agent_tools
 
 from claudecode_model.exceptions import MissingDepsError, UnsupportedDepsTypeError
 from claudecode_model.model import ClaudeCodeModel
@@ -65,8 +66,8 @@ class TestSetAgentToolsetsWithDeps:
 
         assert model._agent_toolsets is not None
         assert "fetch_data" in model._tools_cache
-        assert model._deps is deps
         assert model._deps_context is not None
+        assert model._deps_context.deps is deps
 
     def test_set_agent_toolsets_raises_missing_deps_error(self) -> None:
         """set_agent_toolsets should raise MissingDepsError for takes_ctx tools without deps."""
@@ -119,7 +120,6 @@ class TestSetAgentToolsetsWithDeps:
         model.set_agent_toolsets([mock_tool])
 
         assert "plain_tool" in model._tools_cache
-        assert model._deps is None
         assert model._deps_context is None
 
     def test_set_agent_toolsets_with_unsupported_deps_type(self) -> None:
@@ -173,12 +173,15 @@ class TestSetAgentToolsetsWithDeps:
         assert received_deps["timeout"] == 30
 
     def test_set_agent_toolsets_deps_with_sdk_transport(self) -> None:
-        """set_agent_toolsets should work with deps in SDK transport mode."""
+        """set_agent_toolsets should work with deps in SDK transport mode and handler executes."""
         agent: Agent[_TestDeps] = Agent("test", deps_type=_TestDeps)
+        received_deps: dict[str, object] = {}
 
         @agent.tool
         def fetch_data(ctx: RunContext[_TestDeps], query: str) -> str:
             """Fetch data using deps."""
+            received_deps["api_url"] = ctx.deps.api_url
+            received_deps["timeout"] = ctx.deps.timeout
             return f"url={ctx.deps.api_url}, query={query}"
 
         model = ClaudeCodeModel()
@@ -190,4 +193,19 @@ class TestSetAgentToolsetsWithDeps:
 
         assert model._agent_toolsets is not None
         assert "fetch_data" in model._tools_cache
-        assert model._deps is deps
+        assert model._deps_context is not None
+        assert model._deps_context.deps is deps
+
+        # Verify handler execution via convert_tool_with_context (same path as SDK mode)
+        from claudecode_model.tool_converter import convert_tool_with_context
+
+        tools = get_agent_tools(agent)
+        sdk_tool = convert_tool_with_context(tools[0], model._deps_context)
+        result: dict[str, object] = asyncio.run(sdk_tool.handler({"query": "test"}))
+
+        assert "content" in result
+        content_list = result["content"]
+        assert isinstance(content_list, list)
+        assert "url=https://api.example.com, query=test" in content_list[0]["text"]
+        assert received_deps["api_url"] == "https://api.example.com"
+        assert received_deps["timeout"] == 30

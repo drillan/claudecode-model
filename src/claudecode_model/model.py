@@ -61,7 +61,7 @@ from claudecode_model.mcp_integration import (
     extract_tools_from_toolsets,
 )
 from claudecode_model.tool_converter import (
-    convert_tool_with_deps,
+    convert_mixed_tools_to_mcp_server,
     create_async_handler,
 )
 from claudecode_model.response_converter import convert_usage_dict_to_cli_usage
@@ -214,7 +214,6 @@ class ClaudeCodeModel(Model):
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
         self._transport: TransportType = DEFAULT_TRANSPORT
-        self._deps: object | None = None
         self._deps_context: DepsContext[object] | None = None
 
         logger.debug(
@@ -1546,7 +1545,6 @@ class ClaudeCodeModel(Model):
         self._current_server_name = server_name
         self._agent_toolsets = toolsets
         self._transport = transport
-        self._deps = deps
 
         # Build tools cache for efficient lookup in _find_tools_by_names
         self._tools_cache = {}
@@ -1607,9 +1605,9 @@ class ClaudeCodeModel(Model):
     ) -> McpSdkServerConfig:
         """Create MCP server, using deps-aware conversion for takes_ctx tools.
 
-        For tools with ``takes_ctx=True``, uses ``convert_tool_with_deps()``
-        from tool_converter. For plain tools, uses the existing
-        ``create_mcp_server_from_tools()`` path.
+        Delegates to ``convert_mixed_tools_to_mcp_server()`` from tool_converter
+        when ``takes_ctx`` tools are present, otherwise falls back to
+        ``create_mcp_server_from_tools()``.
 
         Args:
             server_name: MCP server name.
@@ -1618,8 +1616,6 @@ class ClaudeCodeModel(Model):
         Returns:
             McpSdkServerConfig for use with ClaudeAgentOptions.mcp_servers.
         """
-        from pydantic_ai.tools import Tool as PydanticTool
-
         if self._deps_context is None or tools_for_mcp is None or not tools_for_mcp:
             return create_mcp_server_from_tools(
                 name=server_name, toolsets=tools_for_mcp
@@ -1637,42 +1633,11 @@ class ClaudeCodeModel(Model):
                 name=server_name, toolsets=tools_for_mcp
             )
 
-        # Mixed path: build SdkMcpTool list with per-tool branching
-        from claude_agent_sdk import create_sdk_mcp_server
-
-        from claudecode_model.mcp_integration import (
-            ToolDefinition,
-            _get_parameters_json_schema,
-            convert_tool_definition,
-        )
-        from claudecode_model.tool_converter import convert_tool
-
-        sdk_tools = []
-        for t in tools_for_mcp:
-            tool_name = getattr(t, "name", "")
-            cached = self._tools_cache.get(tool_name)
-            if (
-                cached
-                and getattr(cached, "takes_ctx", False) is True
-                and isinstance(cached, PydanticTool)
-                and self._deps is not None
-            ):
-                sdk_tools.append(convert_tool_with_deps(cached, self._deps))
-            elif isinstance(cached, PydanticTool):
-                sdk_tools.append(convert_tool(cached))
-            else:
-                tool_def = ToolDefinition(
-                    name=tool_name,
-                    description=getattr(t, "description", ""),
-                    input_schema=_get_parameters_json_schema(t),
-                    function=getattr(t, "function", None),
-                )
-                sdk_tools.append(convert_tool_definition(tool_def))
-
-        return create_sdk_mcp_server(
-            name=server_name,
-            version="1.0.0",
-            tools=sdk_tools if sdk_tools else None,
+        return convert_mixed_tools_to_mcp_server(
+            tools_for_mcp,
+            self._tools_cache,
+            self._deps_context,
+            server_name=server_name,
         )
 
     def _prepare_ipc_session(

@@ -9,7 +9,7 @@ from claudecode_model.mcp_integration import (
     MCP_SERVER_NAME,
     ToolDefinition,
     ToolValidationError,
-    _get_parameters_json_schema,
+    get_parameters_json_schema,
     convert_tool_definition,
     create_mcp_server_from_tools,
     create_tool_wrapper,
@@ -18,7 +18,7 @@ from claudecode_model.mcp_integration import (
 
 
 class TestGetParametersJsonSchema:
-    """Tests for _get_parameters_json_schema helper function."""
+    """Tests for get_parameters_json_schema helper function."""
 
     def test_gets_schema_from_direct_parameters_json_schema(self) -> None:
         """Should get schema from direct parameters_json_schema attribute."""
@@ -28,7 +28,7 @@ class TestGetParametersJsonSchema:
             "properties": {"query": {"type": "string"}},
         }
 
-        result = _get_parameters_json_schema(mock_tool)
+        result = get_parameters_json_schema(mock_tool)
 
         assert result == {
             "type": "object",
@@ -44,7 +44,7 @@ class TestGetParametersJsonSchema:
             "properties": {"location": {"type": "string"}},
         }
 
-        result = _get_parameters_json_schema(mock_tool)
+        result = get_parameters_json_schema(mock_tool)
 
         assert result == {
             "type": "object",
@@ -60,7 +60,7 @@ class TestGetParametersJsonSchema:
             "properties": {"name": {"type": "string"}},
         }
 
-        result = _get_parameters_json_schema(mock_tool)
+        result = get_parameters_json_schema(mock_tool)
 
         assert result == {
             "type": "object",
@@ -73,7 +73,7 @@ class TestGetParametersJsonSchema:
         mock_tool.name = "broken_tool"
 
         with pytest.raises(ToolValidationError) as exc_info:
-            _get_parameters_json_schema(mock_tool)
+            get_parameters_json_schema(mock_tool)
 
         assert "Cannot extract JSON schema" in str(exc_info.value)
         assert "broken_tool" in str(exc_info.value)
@@ -87,7 +87,7 @@ class TestGetParametersJsonSchema:
         mock_tool.tool_def = MagicMock()
         mock_tool.tool_def.parameters_json_schema = {"tool_def": True}
 
-        result = _get_parameters_json_schema(mock_tool)
+        result = get_parameters_json_schema(mock_tool)
 
         assert result == {"direct": True}
 
@@ -98,7 +98,7 @@ class TestGetParametersJsonSchema:
         mock_tool.parameters_json_schema = "not_a_dict"
 
         with pytest.raises(ToolValidationError) as exc_info:
-            _get_parameters_json_schema(mock_tool)
+            get_parameters_json_schema(mock_tool)
 
         assert "invalid_tool" in str(exc_info.value)
         assert "must be a dict" in str(exc_info.value)
@@ -111,7 +111,7 @@ class TestGetParametersJsonSchema:
         mock_tool.function_schema.json_schema = ["not", "a", "dict"]
 
         with pytest.raises(ToolValidationError) as exc_info:
-            _get_parameters_json_schema(mock_tool)
+            get_parameters_json_schema(mock_tool)
 
         assert "invalid_tool" in str(exc_info.value)
         assert "must be a dict" in str(exc_info.value)
@@ -126,7 +126,7 @@ class TestGetParametersJsonSchema:
         mock_tool.tool_def.parameters_json_schema = 12345
 
         with pytest.raises(ToolValidationError) as exc_info:
-            _get_parameters_json_schema(mock_tool)
+            get_parameters_json_schema(mock_tool)
 
         assert "invalid_tool" in str(exc_info.value)
         assert "must be a dict" in str(exc_info.value)
