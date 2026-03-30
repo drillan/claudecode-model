@@ -40,8 +40,10 @@ from claudecode_model.cli import (
     DEFAULT_TIMEOUT_SECONDS,
     TIMEOUT_EXIT_CODE,
 )
+from claudecode_model.deps_support import DepsContext, create_deps_context
 from claudecode_model.exceptions import (
     CLIExecutionError,
+    MissingDepsError,
     StructuredOutputError,
     ToolNotFoundError,
     ToolsetNotRegisteredError,
@@ -57,6 +59,10 @@ from claudecode_model.mcp_integration import (
     create_stdio_mcp_config,
     create_tool_wrapper,
     extract_tools_from_toolsets,
+)
+from claudecode_model.tool_converter import (
+    convert_mixed_tools_to_mcp_server,
+    create_async_handler,
 )
 from claudecode_model.response_converter import convert_usage_dict_to_cli_usage
 from claudecode_model.types import (
@@ -208,6 +214,7 @@ class ClaudeCodeModel(Model):
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
         self._transport: TransportType = DEFAULT_TRANSPORT
+        self._deps_context: DepsContext[object] | None = None
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -1295,10 +1302,9 @@ class ClaudeCodeModel(Model):
                 # Regenerate IPC session for filtered tools (FR-012)
                 self._prepare_ipc_session(server_name, matched_tools)
             else:
-                # SDK mode: use existing create_mcp_server_from_tools
-                self._mcp_servers[server_name] = create_mcp_server_from_tools(
-                    name=server_name,
-                    toolsets=matched_tools,
+                # SDK mode: use deps-aware conversion if applicable
+                self._mcp_servers[server_name] = self._create_mcp_server_with_deps(
+                    server_name, matched_tools
                 )
 
     async def _start_ipc_server(self) -> None:
@@ -1500,6 +1506,7 @@ class ClaudeCodeModel(Model):
         *,
         server_name: str = MCP_SERVER_NAME,
         transport: TransportType = DEFAULT_TRANSPORT,
+        deps: object | None = None,
     ) -> None:
         """Register pydantic-ai Agent toolsets for MCP server exposure.
 
@@ -1515,6 +1522,15 @@ class ClaudeCodeModel(Model):
                 ``"auto"`` (default) is currently equivalent to ``"stdio"``.
                 ``"stdio"`` uses IPC bridge mode via Unix domain socket.
                 ``"sdk"`` uses legacy SDK mode (``McpSdkServerConfig``).
+            deps: Optional dependencies for tools that use ``RunContext``.
+                Required when any tool has ``takes_ctx=True``.
+                Must be a serializable type (dict, list, str, int, float, bool,
+                None, dataclass, or Pydantic BaseModel).
+
+        Raises:
+            MissingDepsError: If any tool has ``takes_ctx=True`` but ``deps``
+                is not provided.
+            UnsupportedDepsTypeError: If ``deps`` is not a serializable type.
 
         Note:
             Calling this method multiple times will overwrite the previous toolsets.
@@ -1544,6 +1560,22 @@ class ClaudeCodeModel(Model):
         else:
             tools_for_mcp = None
 
+        # Detect takes_ctx tools and validate deps
+        # Use `is True` to avoid MagicMock truthy values in tests
+        takes_ctx_tools = [
+            name
+            for name, tool_obj in self._tools_cache.items()
+            if getattr(tool_obj, "takes_ctx", False) is True
+        ]
+        if takes_ctx_tools and deps is None:
+            raise MissingDepsError(takes_ctx_tools)
+
+        # Create DepsContext once if deps are provided (fail-fast on invalid types)
+        if deps is not None:
+            self._deps_context = create_deps_context(deps)  # type: ignore[assignment]
+        else:
+            self._deps_context = None
+
         # Choose MCP server type based on transport mode
         effective_transport = "stdio" if transport == "auto" else transport
 
@@ -1552,9 +1584,8 @@ class ClaudeCodeModel(Model):
         else:
             # SDK mode or no tools
             self._ipc_session = None
-            self._mcp_servers[server_name] = create_mcp_server_from_tools(
-                name=server_name,
-                toolsets=tools_for_mcp,
+            self._mcp_servers[server_name] = self._create_mcp_server_with_deps(
+                server_name, tools_for_mcp
             )
 
         registered_names = list(self._tools_cache.keys())
@@ -1565,6 +1596,48 @@ class ClaudeCodeModel(Model):
             server_name,
             transport,
             registered_names,
+        )
+
+    def _create_mcp_server_with_deps(
+        self,
+        server_name: str,
+        tools_for_mcp: Sequence[PydanticAITool] | None,
+    ) -> McpSdkServerConfig:
+        """Create MCP server, using deps-aware conversion for takes_ctx tools.
+
+        Delegates to ``convert_mixed_tools_to_mcp_server()`` from tool_converter
+        when ``takes_ctx`` tools are present, otherwise falls back to
+        ``create_mcp_server_from_tools()``.
+
+        Args:
+            server_name: MCP server name.
+            tools_for_mcp: Sequence of pydantic-ai tools, or None.
+
+        Returns:
+            McpSdkServerConfig for use with ClaudeAgentOptions.mcp_servers.
+        """
+        if self._deps_context is None or tools_for_mcp is None or not tools_for_mcp:
+            return create_mcp_server_from_tools(
+                name=server_name, toolsets=tools_for_mcp
+            )
+
+        has_ctx_tools = any(
+            getattr(
+                self._tools_cache.get(getattr(t, "name", ""), None), "takes_ctx", False
+            )
+            is True
+            for t in tools_for_mcp
+        )
+        if not has_ctx_tools:
+            return create_mcp_server_from_tools(
+                name=server_name, toolsets=tools_for_mcp
+            )
+
+        return convert_mixed_tools_to_mcp_server(
+            tools_for_mcp,
+            self._tools_cache,
+            self._deps_context,
+            server_name=server_name,
         )
 
     def _prepare_ipc_session(
@@ -1593,7 +1666,19 @@ class ClaudeCodeModel(Model):
             name = td["name"]
             original_fn = td.get("function")
             if original_fn is not None:
-                tool_handlers[name] = create_tool_wrapper(original_fn)
+                cached_tool = self._tools_cache.get(name)
+                if (
+                    cached_tool
+                    and getattr(cached_tool, "takes_ctx", False) is True
+                    and self._deps_context is not None
+                ):
+                    tool_handlers[name] = create_async_handler(
+                        original_fn,
+                        takes_ctx=True,
+                        deps_context=self._deps_context,
+                    )
+                else:
+                    tool_handlers[name] = create_tool_wrapper(original_fn)
 
             tool_schemas.append(
                 {

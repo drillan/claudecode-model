@@ -14,10 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Literal, TypedDict
 
-from claude_agent_sdk import SdkMcpTool
+from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server
+from claude_agent_sdk.types import McpSdkServerConfig
 from pydantic_ai.tools import Tool
 
 from claudecode_model.deps_support import DepsContext, create_deps_context
@@ -94,7 +95,7 @@ def _format_return_value_as_mcp(result: object) -> McpResponse:
     return McpResponse(content=[McpTextContent(type="text", text=text)])
 
 
-def _create_async_handler(
+def create_async_handler(
     func: Callable[..., object],
     takes_ctx: bool,
     deps_context: DepsContext[object] | None = None,
@@ -182,7 +183,7 @@ def convert_tool(tool: Tool[object]) -> SdkMcpTool[JsonSchema]:
     description = tool_def.description or ""
     input_schema = tool_def.parameters_json_schema
 
-    handler = _create_async_handler(tool.function, takes_ctx=tool.takes_ctx)
+    handler = create_async_handler(tool.function, takes_ctx=tool.takes_ctx)
 
     return SdkMcpTool(
         name=name,
@@ -242,18 +243,47 @@ def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
     if not isinstance(tool, Tool):
         raise TypeError(f"expected Tool, got {type(tool).__name__}")
 
-    tool_def = tool.tool_def
-    name = tool_def.name
-    description = tool_def.description or ""
-    input_schema = tool_def.parameters_json_schema
-
     # Create deps context with validation (raises UnsupportedDepsTypeError if not serializable)
     # DepsContext[T] is invariant, but we only read deps via the .deps property,
     # so widening to DepsContext[object] is safe at runtime. The type: ignore
     # suppresses the assignment error from T -> object covariance mismatch.
     deps_context: DepsContext[object] = create_deps_context(deps)  # type: ignore[assignment]
 
-    handler = _create_async_handler(
+    return convert_tool_with_context(tool, deps_context)  # type: ignore[arg-type]
+
+
+def convert_tool_with_context(
+    tool: Tool[object],
+    deps_context: DepsContext[object],
+) -> SdkMcpTool[JsonSchema]:
+    """Convert a pydantic-ai Tool using a pre-built DepsContext (experimental).
+
+    Unlike ``convert_tool_with_deps``, this function accepts a pre-validated
+    ``DepsContext`` to avoid redundant validation and object creation when
+    converting multiple tools that share the same dependencies.
+
+    Warning:
+        This is an experimental feature. The API may change in future versions.
+
+    Args:
+        tool: A pydantic-ai Tool object that uses RunContext with deps.
+        deps_context: A pre-built DepsContext for dependency injection.
+
+    Returns:
+        An SdkMcpTool that can be used with Claude Agent SDK.
+
+    Raises:
+        TypeError: If the input is not a Tool instance.
+    """
+    if not isinstance(tool, Tool):
+        raise TypeError(f"expected Tool, got {type(tool).__name__}")
+
+    tool_def = tool.tool_def
+    name = tool_def.name
+    description = tool_def.description or ""
+    input_schema = tool_def.parameters_json_schema
+
+    handler = create_async_handler(
         tool.function, takes_ctx=tool.takes_ctx, deps_context=deps_context
     )
 
@@ -303,4 +333,68 @@ def convert_tools_to_mcp_server(
         name=server_name,
         version=server_version,
         tools=sdk_tools,
+    )
+
+
+def convert_mixed_tools_to_mcp_server(
+    tools: Sequence[object],
+    tools_cache: Mapping[str, object],
+    deps_context: DepsContext[object] | None = None,
+    *,
+    server_name: str = "pydantic_tools",
+    server_version: str = "1.0.0",
+) -> McpSdkServerConfig:
+    """Convert a mixed sequence of tools to an MCP server config (experimental).
+
+    Handles both ``takes_ctx`` tools (with deps injection) and plain tools
+    in a single pass. For ``takes_ctx`` tools, uses ``convert_tool_with_context()``
+    with the pre-built ``DepsContext``. For plain tools, uses ``convert_tool()``.
+    Falls back to ``convert_tool_definition()`` for non-Tool protocol objects.
+
+    Warning:
+        This is an experimental feature. The API may change in future versions.
+
+    Args:
+        tools: Sequence of tool objects (Tool instances or PydanticAITool protocol).
+        tools_cache: Mapping of tool names to tool objects for ``takes_ctx`` lookup.
+        deps_context: Pre-built DepsContext for ``takes_ctx`` tools. Required if
+            any tool has ``takes_ctx=True``.
+        server_name: MCP server name. Defaults to ``"pydantic_tools"``.
+        server_version: MCP server version. Defaults to ``"1.0.0"``.
+
+    Returns:
+        McpSdkServerConfig for use with ClaudeAgentOptions.mcp_servers.
+    """
+    from claudecode_model.mcp_integration import (
+        ToolDefinition,
+        convert_tool_definition,
+        get_parameters_json_schema,
+    )
+
+    sdk_tools: list[SdkMcpTool[JsonSchema]] = []
+    for t in tools:
+        tool_name = getattr(t, "name", "")
+        cached = tools_cache.get(tool_name)
+        if (
+            cached
+            and getattr(cached, "takes_ctx", False) is True
+            and isinstance(cached, Tool)
+            and deps_context is not None
+        ):
+            sdk_tools.append(convert_tool_with_context(cached, deps_context))
+        elif isinstance(cached, Tool):
+            sdk_tools.append(convert_tool(cached))
+        else:
+            tool_def = ToolDefinition(
+                name=tool_name,
+                description=getattr(t, "description", ""),
+                input_schema=get_parameters_json_schema(t),
+                function=getattr(t, "function", None),
+            )
+            sdk_tools.append(convert_tool_definition(tool_def))
+
+    return create_sdk_mcp_server(
+        name=server_name,
+        version=server_version,
+        tools=sdk_tools if sdk_tools else None,
     )
