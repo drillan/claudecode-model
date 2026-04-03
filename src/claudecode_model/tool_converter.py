@@ -22,8 +22,8 @@ from claude_agent_sdk.types import McpSdkServerConfig
 from pydantic_ai.tools import Tool
 
 from claudecode_model.deps_support import (
+    DepsBearer,
     DepsContext,
-    ToolCallContext,
     create_deps_context,
 )
 
@@ -102,16 +102,15 @@ def _format_return_value_as_mcp(result: object) -> McpResponse:
 def create_async_handler(
     func: Callable[..., object],
     takes_ctx: bool,
-    deps_context: ToolCallContext[object] | DepsContext[object] | None = None,
+    deps_context: DepsBearer[object] | None = None,
 ) -> Callable[[JsonSchema], Awaitable[dict[str, object]]]:
     """Wrap a sync/async function as an async SDK handler.
 
     Args:
         func: The original tool function (sync or async).
         takes_ctx: Whether the function takes a RunContext as first argument.
-        deps_context: Optional context for tools that use dependencies.
-            Accepts both ToolCallContext (no serialization check) and
-            DepsContext (with serialization check).
+        deps_context: Optional context satisfying ``DepsBearer`` protocol
+            (any object with a ``.deps`` property).
 
     Returns:
         An async function that accepts a dict and returns MCP format response.
@@ -260,19 +259,16 @@ def convert_tool_with_deps[T](tool: Tool[T], deps: T) -> SdkMcpTool[JsonSchema]:
 
 def convert_tool_with_context(
     tool: Tool[object],
-    deps_context: ToolCallContext[object] | DepsContext[object],
+    deps_context: DepsBearer[object],
 ) -> SdkMcpTool[JsonSchema]:
     """Convert a pydantic-ai Tool using a pre-built context (experimental).
-
-    Accepts both ``ToolCallContext`` (no serialization requirement) and
-    ``DepsContext`` (with serialization check) for dependency injection.
 
     Warning:
         This is an experimental feature. The API may change in future versions.
 
     Args:
         tool: A pydantic-ai Tool object that uses RunContext with deps.
-        deps_context: A context object with ``.deps`` property for injection.
+        deps_context: Any object satisfying ``DepsBearer`` protocol.
 
     Returns:
         An SdkMcpTool that can be used with Claude Agent SDK.
@@ -344,7 +340,7 @@ def convert_tools_to_mcp_server(
 def convert_mixed_tools_to_mcp_server(
     tools: Sequence[object],
     tools_cache: Mapping[str, object],
-    deps_context: ToolCallContext[object] | DepsContext[object] | None = None,
+    deps_context: DepsBearer[object] | None = None,
     *,
     server_name: str = "pydantic_tools",
     server_version: str = "1.0.0",
