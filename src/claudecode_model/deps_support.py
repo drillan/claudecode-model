@@ -1,22 +1,19 @@
-"""Serializable dependency support for pydantic-ai RunContext (experimental).
+"""Dependency context support for pydantic-ai RunContext (experimental).
 
-This module provides support for serializing and deserializing dependencies
-used with pydantic-ai's RunContext. Only serializable types are supported.
+This module provides dependency context classes for pydantic-ai RunContext:
+
+- ``ToolCallContext``: Accepts any dependency type without restriction.
+  Used internally by ``set_agent_toolsets()`` for tool handler injection.
+- ``DepsContext``: Enforces serializability (dict, list, str, int, float,
+  bool, None, dataclass, Pydantic BaseModel). Useful when deps must be
+  serialized (e.g., for cross-process communication).
+
+Both classes satisfy the ``DepsBearer`` protocol (a single ``.deps`` property).
+
+Additionally provides serialization/deserialization utilities for deps.
 
 Warning:
     This is an experimental feature. The API may change in future versions.
-
-Supported types:
-    - Primitives: str, int, float, bool, None
-    - Collections: dict, list
-    - dataclass instances
-    - Pydantic BaseModel instances
-
-Unsupported types (will raise UnsupportedDepsTypeError):
-    - httpx.AsyncClient
-    - Database connections
-    - File handles
-    - Any other non-serializable objects
 """
 
 from __future__ import annotations
@@ -25,7 +22,14 @@ import json
 import logging
 from dataclasses import asdict, fields, is_dataclass
 from types import UnionType
-from typing import Union, get_args, get_origin, get_type_hints
+from typing import (
+    Protocol,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+    runtime_checkable,
+)
 
 from dacite import from_dict
 from pydantic import BaseModel
@@ -288,6 +292,42 @@ class DepsContext[T]:
         Returns:
             The dependency object.
         """
+        return self._deps
+
+
+@runtime_checkable
+class DepsBearer[T](Protocol):
+    """Protocol for objects that carry dependencies via a ``.deps`` property.
+
+    Both ``DepsContext`` and ``ToolCallContext`` satisfy this protocol.
+    Use this as the type annotation instead of repeating union types.
+    """
+
+    @property
+    def deps(self) -> T: ...
+
+
+class ToolCallContext[T]:
+    """Lightweight context for tool dependency injection without serialization check.
+
+    Unlike ``DepsContext``, this class accepts any dependency object including
+    non-serializable types (e.g., database connections, file handles, custom stores).
+    The deps are stored by reference and injected into tool handlers at call time.
+
+    This is safe because tool handlers always run in the same process as the deps
+    object — even in IPC/stdio transport mode, the handler executes in the main
+    process while only the MCP messages traverse the bridge subprocess.
+
+    Attributes:
+        deps: The dependency object (any type).
+    """
+
+    def __init__(self, deps: T) -> None:
+        self._deps = deps
+
+    @property
+    def deps(self) -> T:
+        """Get the dependencies."""
         return self._deps
 
 

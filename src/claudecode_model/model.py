@@ -40,7 +40,7 @@ from claudecode_model.cli import (
     DEFAULT_TIMEOUT_SECONDS,
     TIMEOUT_EXIT_CODE,
 )
-from claudecode_model.deps_support import DepsContext, create_deps_context
+from claudecode_model.deps_support import DepsBearer, ToolCallContext
 from claudecode_model.exceptions import (
     CLIExecutionError,
     MissingDepsError,
@@ -214,7 +214,7 @@ class ClaudeCodeModel(Model):
         self._current_server_name: str = MCP_SERVER_NAME
         self._ipc_session: IPCSession | None = None
         self._transport: TransportType = DEFAULT_TRANSPORT
-        self._deps_context: DepsContext[object] | None = None
+        self._deps_context: DepsBearer[object] | None = None
 
         logger.debug(
             "ClaudeCodeModel initialized: model=%s, working_directory=%s, "
@@ -1524,13 +1524,14 @@ class ClaudeCodeModel(Model):
                 ``"sdk"`` uses legacy SDK mode (``McpSdkServerConfig``).
             deps: Optional dependencies for tools that use ``RunContext``.
                 Required when any tool has ``takes_ctx=True``.
-                Must be a serializable type (dict, list, str, int, float, bool,
-                None, dataclass, or Pydantic BaseModel).
+                Any type is accepted, including non-serializable objects
+                (e.g., database connections, custom stores). The deps object
+                is stored by reference and injected into tool handlers at
+                call time without serialization.
 
         Raises:
             MissingDepsError: If any tool has ``takes_ctx=True`` but ``deps``
                 is not provided.
-            UnsupportedDepsTypeError: If ``deps`` is not a serializable type.
 
         Note:
             Calling this method multiple times will overwrite the previous toolsets.
@@ -1570,9 +1571,10 @@ class ClaudeCodeModel(Model):
         if takes_ctx_tools and deps is None:
             raise MissingDepsError(takes_ctx_tools)
 
-        # Create DepsContext once if deps are provided (fail-fast on invalid types)
+        # Create context for deps injection (no serialization requirement —
+        # handlers run in-process for both stdio and SDK transports)
         if deps is not None:
-            self._deps_context = create_deps_context(deps)  # type: ignore[assignment]
+            self._deps_context = ToolCallContext(deps)
         else:
             self._deps_context = None
 

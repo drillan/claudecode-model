@@ -38,7 +38,9 @@ from claudecode_model.cli import (  # noqa: E402
     ClaudeCodeCLI,
 )
 from claudecode_model.deps_support import (  # noqa: E402
+    DepsBearer,
     DepsContext,
+    ToolCallContext,
     create_deps_context,
     deserialize_deps,
     is_instance_serializable,
@@ -152,8 +154,10 @@ __all__ = [
     "IPCMessageSizeError",
     "IPCToolExecutionError",
     "BridgeStartupError",
-    # Serializable deps support (experimental)
+    # Deps support (experimental)
+    "DepsBearer",
     "DepsContext",
+    "ToolCallContext",
     "create_deps_context",
     "is_serializable_type",
     "is_instance_serializable",

@@ -18,7 +18,7 @@ from pydantic_ai import Agent, RunContext
 
 from .conftest import get_agent_tools
 
-from claudecode_model.exceptions import MissingDepsError, UnsupportedDepsTypeError
+from claudecode_model.exceptions import MissingDepsError
 from claudecode_model.model import ClaudeCodeModel
 
 
@@ -122,8 +122,8 @@ class TestSetAgentToolsetsWithDeps:
         assert "plain_tool" in model._tools_cache
         assert model._deps_context is None
 
-    def test_set_agent_toolsets_with_unsupported_deps_type(self) -> None:
-        """set_agent_toolsets should raise UnsupportedDepsTypeError for non-serializable deps."""
+    def test_set_agent_toolsets_accepts_non_serializable_deps(self) -> None:
+        """set_agent_toolsets should accept non-serializable deps (via ToolCallContext)."""
         agent: Agent[_TestDeps] = Agent("test", deps_type=_TestDeps)
 
         @agent.tool
@@ -134,9 +134,16 @@ class TestSetAgentToolsetsWithDeps:
         model = ClaudeCodeModel()
         toolset = agent.toolsets[0]
 
-        # httpx.AsyncClient is not serializable
-        with pytest.raises(UnsupportedDepsTypeError):
-            model.set_agent_toolsets(toolset, deps=httpx.AsyncClient())
+        # httpx.AsyncClient is not serializable but should be accepted
+        client = httpx.AsyncClient()
+        try:
+            model.set_agent_toolsets(toolset, deps=client)  # type: ignore[arg-type]
+            assert model._deps_context is not None
+            assert model._deps_context.deps is client
+        finally:
+            import asyncio
+
+            asyncio.run(client.aclose())
 
     def test_ipc_handler_injects_deps_context(self) -> None:
         """IPC handler should inject DepsContext for takes_ctx tools (stdio mode)."""
