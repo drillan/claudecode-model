@@ -291,6 +291,30 @@ class DepsContext[T]:
         return self._deps
 
 
+class ToolCallContext[T]:
+    """Lightweight context for tool dependency injection without serialization check.
+
+    Unlike ``DepsContext``, this class accepts any dependency object including
+    non-serializable types (e.g., database connections, file handles, custom stores).
+    The deps are stored by reference and injected into tool handlers at call time.
+
+    This is safe because tool handlers always run in the same process as the deps
+    object — even in IPC/stdio transport mode, the handler executes in the main
+    process while only the MCP messages traverse the bridge subprocess.
+
+    Attributes:
+        deps: The dependency object (any type).
+    """
+
+    def __init__(self, deps: T) -> None:
+        self._deps = deps
+
+    @property
+    def deps(self) -> T:
+        """Get the dependencies."""
+        return self._deps
+
+
 def create_deps_context[T](deps: T) -> DepsContext[T]:
     """Create a DepsContext with the given dependencies.
 

@@ -39,6 +39,7 @@ from claudecode_model.cli import (  # noqa: E402
 )
 from claudecode_model.deps_support import (  # noqa: E402
     DepsContext,
+    ToolCallContext,
     create_deps_context,
     deserialize_deps,
     is_instance_serializable,
@@ -154,6 +155,7 @@ __all__ = [
     "BridgeStartupError",
     # Serializable deps support (experimental)
     "DepsContext",
+    "ToolCallContext",
     "create_deps_context",
     "is_serializable_type",
     "is_instance_serializable",
